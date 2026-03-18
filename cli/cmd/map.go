@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/rkrebs/sonar/internal/display"
+	"github.com/raskrebs/sonar/internal/display"
 	"github.com/spf13/cobra"
 )
 

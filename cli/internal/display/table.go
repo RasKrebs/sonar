@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rkrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/ports"
 )
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)

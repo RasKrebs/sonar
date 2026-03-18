@@ -1,4 +1,4 @@
-module github.com/rkrebs/sonar
+module github.com/raskrebs/sonar
 
 go 1.25.0
 

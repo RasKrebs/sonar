@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/rkrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/ports"
 )
 
 // JSONPort is the JSON-serializable representation of a listening port.

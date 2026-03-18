@@ -37,20 +37,16 @@ PORT   PROCESS                      CONTAINER                    IMAGE          
 
 ## Install
 
-Requires [Go](https://go.dev/dl/).
-
 ```sh
-git clone https://github.com/rkrebs/sonar.git
-cd sonar
-./install.sh
+curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | sh
 ```
 
-This builds the binary and adds `~/.sonar/bin` to your PATH. Restart your terminal, open a new terminal window or run `source ~/.zshrc` to start using it.
+This downloads the latest release binary and adds `~/.sonar/bin` to your PATH. Restart your terminal or run `source ~/.zshrc` to start using it.
 
 To customize the install location:
 
 ```sh
-SONAR_INSTALL_DIR=/usr/local/bin ./install.sh
+curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | SONAR_INSTALL_DIR=/usr/local/bin sh
 ```
 
 ## Usage

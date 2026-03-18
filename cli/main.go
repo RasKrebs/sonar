@@ -1,6 +1,6 @@
 package main
 
-import "github.com/rkrebs/sonar/cmd"
+import "github.com/raskrebs/sonar/cmd"
 
 func main() {
 	cmd.Execute()
