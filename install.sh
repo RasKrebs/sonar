@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Sonar installer
-# Usage: curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | sh
+# Usage: curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | bash
 
-INSTALL_DIR="${SONAR_INSTALL_DIR:-$HOME/.sonar/bin}"
+INSTALL_DIR="${SONAR_INSTALL_DIR:-$HOME/.local/bin}"
 REPO="raskrebs/sonar"
 
 # Colors (respect NO_COLOR)
