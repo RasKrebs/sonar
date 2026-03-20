@@ -55,6 +55,41 @@ func parseLinuxStats(p *ListeningPort, fields []string) {
 	p.Uptime = computeUptime(lstart)
 }
 
+// parseWindowsStats parses CSV fields from PowerShell Get-Process:
+// fields[0]=CPU, fields[1]=WorkingSet64, fields[2]=ThreadCount, fields[3]=StartTime
+func parseWindowsStats(p *ListeningPort, fields []string) {
+	if len(fields) < 4 {
+		return
+	}
+
+	if v, err := strconv.ParseFloat(strings.TrimSpace(fields[0]), 64); err == nil {
+		p.CPUPercent = v
+	}
+	if v, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64); err == nil {
+		p.MemoryRSS = v // WorkingSet64 is already in bytes
+	}
+	if v, err := strconv.Atoi(strings.TrimSpace(fields[2])); err == nil {
+		p.ThreadCount = v
+	}
+	p.State = "running"
+
+	startStr := strings.TrimSpace(fields[3])
+	if startStr != "" {
+		p.StartTime = startStr
+		// PowerShell formats: "3/20/2026 10:30:00 AM" or similar locale-dependent
+		for _, layout := range []string{
+			"1/2/2006 3:04:05 PM",
+			"1/2/2006 15:04:05",
+			"2006-01-02 15:04:05",
+		} {
+			if t, err := time.Parse(layout, startStr); err == nil {
+				p.Uptime = formatDuration(time.Since(t))
+				break
+			}
+		}
+	}
+}
+
 // countThreadsDarwin gets thread count on macOS via ps -M.
 func countThreadsDarwin(pid int) int {
 	out, err := exec.Command("ps", "-M", "-p", strconv.Itoa(pid)).Output()
@@ -76,9 +111,16 @@ func countConnections(port int) int {
 	var out []byte
 	var err error
 
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		out, err = exec.Command("lsof", "-iTCP:"+portStr, "-sTCP:ESTABLISHED", "-n", "-P").Output()
-	} else {
+	case "windows":
+		out, err = exec.Command("netstat", "-ano").Output()
+		if err != nil {
+			return 0
+		}
+		return countConnectionsNetstat(string(out), portStr)
+	default:
 		out, err = exec.Command("ss", "-tn", "state", "established", fmt.Sprintf("sport = :%s", portStr)).Output()
 	}
 	if err != nil {
@@ -93,6 +135,27 @@ func countConnections(port int) int {
 	count := len(lines) - 1
 	if runtime.GOOS == "darwin" {
 		count = count / 2
+	}
+	return count
+}
+
+// countConnectionsNetstat counts ESTABLISHED connections to a port from netstat -ano output.
+func countConnectionsNetstat(output, portStr string) int {
+	count := 0
+	suffix := ":" + portStr
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		if strings.ToUpper(fields[3]) != "ESTABLISHED" {
+			continue
+		}
+		// Check if local address matches the port
+		if strings.HasSuffix(fields[1], suffix) {
+			count++
+		}
 	}
 	return count
 }

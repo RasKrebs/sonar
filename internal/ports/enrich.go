@@ -1,6 +1,8 @@
 package ports
 
 import (
+	"encoding/csv"
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -47,9 +49,19 @@ func EnrichStats(pp []ListeningPort, dockerStats map[string]*DockerStatsEntry) {
 	// Batch native process stats into a single ps call
 	batchEnrichProcessStats(pp)
 
-	// Connection counts
-	for i := range pp {
-		pp[i].Connections = countConnections(pp[i].Port)
+	// Connection counts — on Windows, fetch netstat once and reuse the output
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("netstat", "-ano").Output()
+		if err == nil {
+			output := string(out)
+			for i := range pp {
+				pp[i].Connections = countConnectionsNetstat(output, strconv.Itoa(pp[i].Port))
+			}
+		}
+	} else {
+		for i := range pp {
+			pp[i].Connections = countConnections(pp[i].Port)
+		}
 	}
 }
 
@@ -75,6 +87,10 @@ func batchGetCommands(pp []ListeningPort) map[int]string {
 		pidStrs[i] = strconv.Itoa(p)
 	}
 
+	if runtime.GOOS == "windows" {
+		return batchGetCommandsWindows(pidStrs)
+	}
+
 	out, err := exec.Command("ps", "-o", "pid=,command=", "-p", strings.Join(pidStrs, ",")).Output()
 	if err != nil {
 		return result
@@ -98,8 +114,55 @@ func batchGetCommands(pp []ListeningPort) map[int]string {
 	return result
 }
 
+// batchGetCommandsWindows fetches command lines via PowerShell Get-CimInstance on Windows.
+func batchGetCommandsWindows(pidStrs []string) map[int]string {
+	result := make(map[int]string)
+
+	// Build WMI filter: "ProcessId=123 or ProcessId=456"
+	var conditions []string
+	for _, p := range pidStrs {
+		conditions = append(conditions, "ProcessId="+p)
+	}
+	filter := strings.Join(conditions, " or ")
+
+	psCmd := fmt.Sprintf(
+		"Get-CimInstance Win32_Process -Filter '%s' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation",
+		filter,
+	)
+
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", psCmd).Output()
+	if err != nil {
+		return result
+	}
+
+	r := csv.NewReader(strings.NewReader(strings.TrimSpace(string(out))))
+	records, err := r.ReadAll()
+	if err != nil {
+		return result
+	}
+
+	// CSV columns: "ProcessId","CommandLine"
+	for i, record := range records {
+		if i == 0 {
+			continue // skip header
+		}
+		if len(record) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
+		if err != nil {
+			continue
+		}
+		cmd := strings.TrimSpace(record[1])
+		if cmd != "" {
+			result[pid] = cmd
+		}
+	}
+	return result
+}
+
 // batchEnrichProcessStats fetches CPU, memory, state, uptime for all non-Docker
-// ports in a single ps call.
+// ports in a single ps call (or PowerShell on Windows).
 func batchEnrichProcessStats(pp []ListeningPort) {
 	var nativePorts []*ListeningPort
 	for i := range pp {
@@ -116,6 +179,17 @@ func batchEnrichProcessStats(pp []ListeningPort) {
 		pidStrs[i] = strconv.Itoa(p.PID)
 	}
 
+	// Build PID -> port lookup
+	pidMap := make(map[int]*ListeningPort)
+	for _, p := range nativePorts {
+		pidMap[p.PID] = p
+	}
+
+	if runtime.GOOS == "windows" {
+		batchEnrichProcessStatsWindows(pidStrs, pidMap)
+		return
+	}
+
 	var out []byte
 	var err error
 	if runtime.GOOS == "darwin" {
@@ -125,12 +199,6 @@ func batchEnrichProcessStats(pp []ListeningPort) {
 	}
 	if err != nil {
 		return
-	}
-
-	// Build PID -> port lookup
-	pidMap := make(map[int]*ListeningPort)
-	for _, p := range nativePorts {
-		pidMap[p.PID] = p
 	}
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -154,6 +222,44 @@ func batchEnrichProcessStats(pp []ListeningPort) {
 		} else {
 			parseLinuxStats(p, rest)
 		}
+	}
+}
+
+// batchEnrichProcessStatsWindows uses PowerShell Get-Process to fetch stats.
+func batchEnrichProcessStatsWindows(pidStrs []string, pidMap map[int]*ListeningPort) {
+	psCmd := fmt.Sprintf(
+		"Get-Process -Id %s -ErrorAction SilentlyContinue | Select-Object Id,CPU,WorkingSet64,@{N='ThreadCount';E={$_.Threads.Count}},StartTime | ConvertTo-Csv -NoTypeInformation",
+		strings.Join(pidStrs, ","),
+	)
+
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", psCmd).Output()
+	if err != nil {
+		return
+	}
+
+	r := csv.NewReader(strings.NewReader(strings.TrimSpace(string(out))))
+	records, err := r.ReadAll()
+	if err != nil {
+		return
+	}
+
+	// CSV columns: "Id","CPU","WorkingSet64","ThreadCount","StartTime"
+	for i, record := range records {
+		if i == 0 {
+			continue // skip header
+		}
+		if len(record) < 5 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
+		if err != nil {
+			continue
+		}
+		p, ok := pidMap[pid]
+		if !ok {
+			continue
+		}
+		parseWindowsStats(p, record[1:])
 	}
 }
 
