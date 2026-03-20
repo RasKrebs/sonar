@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	nextCountFlag int
+	nextConsecutiveFlag int
 	nextJSONFlag  bool
 )
 
@@ -22,7 +22,7 @@ var nextCmd = &cobra.Command{
 	Long: `Find the next available TCP port not currently in use.
 
 By default, searches starting from port 3000. You can specify a start port
-or a range (e.g. 3000-3100). Use --count to find multiple consecutive free ports.
+or a range (e.g. 3000-3100). Use -n/--consecutive to find multiple consecutive free ports.
 
 Results reflect a point-in-time snapshot; a port could be allocated by another process before you bind it.
 
@@ -30,14 +30,14 @@ Examples:
   sonar next              # first free port starting from 3000
   sonar next 8000         # first free port starting from 8000
   sonar next 3000-3100    # first free port in range 3000-3100
-  sonar next --count 3    # find 3 consecutive free ports from 3000
+  sonar next -n 3          # find 3 consecutive free ports from 3000
   sonar next 8000 --json  # JSON output`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: nextRun,
 }
 
 func init() {
-	nextCmd.Flags().IntVar(&nextCountFlag, "count", 1, "Number of consecutive free ports to find")
+	nextCmd.Flags().IntVarP(&nextConsecutiveFlag, "consecutive", "n", 1, "Number of consecutive free ports to find")
 	nextCmd.Flags().BoolVar(&nextJSONFlag, "json", false, "Output as JSON")
 	rootCmd.AddCommand(nextCmd)
 }
@@ -72,8 +72,8 @@ func nextRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if nextCountFlag < 1 {
-		return fmt.Errorf("--count must be at least 1")
+	if nextConsecutiveFlag < 1 {
+		return fmt.Errorf("--consecutive must be at least 1")
 	}
 
 	results, err := ports.Scan()
@@ -86,12 +86,12 @@ func nextRun(cmd *cobra.Command, args []string) error {
 		occupied[r.Port] = true
 	}
 
-	freePorts := findFreePorts(occupied, startPort, endPort, nextCountFlag)
-	if len(freePorts) < nextCountFlag {
+	freePorts := findFreePorts(occupied, startPort, endPort, nextConsecutiveFlag)
+	if len(freePorts) < nextConsecutiveFlag {
 		if endPort < 65535 {
-			return fmt.Errorf("no %d consecutive free port(s) in range %d-%d", nextCountFlag, startPort, endPort)
+			return fmt.Errorf("no %d consecutive free port(s) in range %d-%d", nextConsecutiveFlag, startPort, endPort)
 		}
-		return fmt.Errorf("no %d consecutive free port(s) starting from %d", nextCountFlag, startPort)
+		return fmt.Errorf("no %d consecutive free port(s) starting from %d", nextConsecutiveFlag, startPort)
 	}
 
 	if nextJSONFlag {
