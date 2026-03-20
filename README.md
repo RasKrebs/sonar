@@ -51,6 +51,17 @@ sonar completion bash > /etc/bash_completion.d/sonar  # bash
 sonar completion fish | source                 # fish
 ```
 
+### Nix
+
+```sh
+nix run github:smallstepman/sonar  # one-time run
+```
+
+Or add to your flake:
+```nix
+inputs.sonar.url = "github:smallstepman/sonar";
+```
+
 ## Usage
 
 ### List ports
