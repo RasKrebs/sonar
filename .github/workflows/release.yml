@@ -37,7 +37,7 @@ jobs:
           name: sonar_linux_${{ matrix.goarch }}
           path: sonar_linux_${{ matrix.goarch }}.tar.gz
 
-  build-darwin:
+  build-macos:
     runs-on: macos-latest
     strategy:
       matrix:
@@ -50,7 +50,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build
+      - name: Build Go binary
         env:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
@@ -58,7 +58,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           go build -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" -o sonar .
           codesign -s - sonar
-          tar czf sonar_darwin_${{ matrix.goarch }}.tar.gz sonar
+
+      - name: Build Swift tray app
+        run: |
+          swiftc -O -o sonar-tray tray/SonarTray.swift \
+            -target ${{ matrix.goarch == 'amd64' && 'x86_64' || 'arm64' }}-apple-macos13
+
+      - name: Package
+        run: |
+          tar czf sonar_darwin_${{ matrix.goarch }}.tar.gz sonar sonar-tray
 
       - uses: actions/upload-artifact@v4
         with:
@@ -66,7 +74,7 @@ jobs:
           path: sonar_darwin_${{ matrix.goarch }}.tar.gz
 
   release:
-    needs: [build-linux, build-darwin]
+    needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
