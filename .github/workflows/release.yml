@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: cli/go.mod
+          go-version-file: go.mod
 
       - name: Build
         env:
@@ -28,9 +28,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          cd cli
           go build -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" -o sonar .
-          tar czf ../sonar_linux_${{ matrix.goarch }}.tar.gz sonar
+          tar czf sonar_linux_${{ matrix.goarch }}.tar.gz sonar
 
       - uses: actions/upload-artifact@v4
         with:
@@ -48,7 +47,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: cli/go.mod
+          go-version-file: go.mod
 
       - name: Build
         env:
@@ -56,10 +55,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          cd cli
           go build -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" -o sonar .
           codesign -s - sonar
-          tar czf ../sonar_darwin_${{ matrix.goarch }}.tar.gz sonar
+          tar czf sonar_darwin_${{ matrix.goarch }}.tar.gz sonar
 
       - uses: actions/upload-artifact@v4
         with:
