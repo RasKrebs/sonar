@@ -43,6 +43,12 @@ Custom install location:
 curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | SONAR_INSTALL_DIR=/usr/local/bin bash
 ```
 
+### Using Go
+
+```sh
+go install github.com/RasKrebs/sonar@latest
+```
+
 Shell completions (tab-complete port numbers):
 
 ```sh
