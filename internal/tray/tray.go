@@ -6,11 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 )
 
 // Run starts the system tray application. On macOS it launches the native
 // Swift menu bar app (sonar-tray). On other platforms it returns an error.
-func Run() error {
+// When detach is true, the tray app is started in the background and the
+// command returns immediately.
+func Run(detach bool) error {
 	if runtime.GOOS != "darwin" {
 		return fmt.Errorf("system tray is currently only supported on macOS")
 	}
@@ -21,6 +24,16 @@ func Run() error {
 	}
 
 	cmd := exec.Command(trayBin)
+
+	if detach {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start tray: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "sonar tray running (pid %d)\n", cmd.Process.Pid)
+		return nil
+	}
+
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
