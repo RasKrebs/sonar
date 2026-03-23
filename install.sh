@@ -93,6 +93,14 @@ cp "$BINARY" "$INSTALL_DIR/sonar"
 chmod +x "$INSTALL_DIR/sonar"
 success "Installed sonar ${TAG} to $INSTALL_DIR/sonar"
 
+# Install sonar-tray if present (macOS only)
+TRAY_BINARY="$(find "$TMP_DIR" -name sonar-tray -type f | head -1)"
+if [ -n "$TRAY_BINARY" ]; then
+    cp "$TRAY_BINARY" "$INSTALL_DIR/sonar-tray"
+    chmod +x "$INSTALL_DIR/sonar-tray"
+    success "Installed sonar-tray to $INSTALL_DIR/sonar-tray"
+fi
+
 # Add to PATH if not already there
 add_to_path() {
     local shell_config="$1"

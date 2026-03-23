@@ -3,4 +3,7 @@
 # Build output
 cli/sonar
 sonar
+sonar-tray
+*.tar.gz
 dist/
+install-local.sh

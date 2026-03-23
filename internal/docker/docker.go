@@ -163,13 +163,12 @@ func AllContainerStats() map[string]*ContainerStats {
 
 // fetchContainerStatsAPI fetches stats for a single container via the Docker socket API.
 func fetchContainerStatsAPI(name string) *ContainerStats {
-	stats := &ContainerStats{}
-
-	// Fetch /stats?stream=false (includes CPU with precpu for delta calculation)
 	conn, err := net.Dial("unix", dockerSocket)
 	if err != nil {
 		return nil
 	}
+
+	stats := &ContainerStats{}
 
 	statsReq := fmt.Sprintf("GET /containers/%s/stats?stream=false HTTP/1.0\r\nHost: localhost\r\n\r\n", name)
 	conn.SetDeadline(time.Now().Add(5 * time.Second))

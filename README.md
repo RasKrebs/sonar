@@ -49,6 +49,8 @@ curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/install.sh | SON
 go install github.com/raskrebs/sonar@latest
 ```
 
+> **Note:** `go install` only installs the CLI. The menu bar tray app (`sonar tray`) is a native Swift binary and must be built separately — see [Tray app](#tray-app) below.
+
 Shell completions (tab-complete port numbers):
 
 ```sh
@@ -190,6 +192,22 @@ sonar --no-color                           # disable colors (also respects NO_CO
 ```
 
 The `--stats` flag fetches per-process and per-container resource usage. For Docker containers, it uses the Docker Engine API for accurate per-container metrics. Without `--stats`, sonar returns instantly.
+
+## Tray app
+
+The menu bar tray app (macOS only) is a native Swift binary that shows live port stats in your menu bar. If you installed sonar via the install script or a GitHub release, the tray binary (`sonar-tray`) is included automatically.
+
+If you installed via `go install`, build it manually:
+
+```sh
+swiftc -O -o sonar-tray tray/SonarTray.swift -target arm64-apple-macos13
+```
+
+Then move `sonar-tray` somewhere on your `$PATH` and run:
+
+```sh
+sonar tray
+```
 
 ## Supported platforms
 
