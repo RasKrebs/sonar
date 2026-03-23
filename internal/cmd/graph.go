@@ -42,6 +42,13 @@ func graphRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Add Docker inter-container connections
+	dockerConns, err := docker.BuildDockerGraph(results)
+	if err != nil {
+		return err
+	}
+	connections = append(connections, dockerConns...)
+
 	if len(connections) == 0 {
 		fmt.Println("No inter-service connections detected.")
 		return nil
