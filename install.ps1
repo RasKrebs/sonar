@@ -10,10 +10,11 @@ function Write-Info($msg) { Write-Host "sonar " -ForegroundColor Cyan -NoNewline
 function Write-Ok($msg) { Write-Host "  OK " -ForegroundColor Green -NoNewline; Write-Host $msg }
 function Write-Err($msg) { Write-Host "  ERR " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
 
-# Detect architecture
-$Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
-    "X64"   { "amd64" }
-    "Arm64" { "arm64" }
+# Detect architecture ($env:PROCESSOR_ARCHITECTURE works on PowerShell 5.x;
+# RuntimeInformation is unavailable there and crashes the script)
+$Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+    "AMD64" { "amd64" }
+    "ARM64" { "arm64" }
     default { Write-Err "Unsupported architecture: $_" }
 }
 
