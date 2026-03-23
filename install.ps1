@@ -11,9 +11,9 @@ function Write-Ok($msg) { Write-Host "  OK " -ForegroundColor Green -NoNewline; 
 function Write-Err($msg) { Write-Host "  ERR " -ForegroundColor Red -NoNewline; Write-Host $msg; exit 1 }
 
 # Detect architecture
-$Arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-    "AMD64" { "amd64" }
-    "ARM64" { "arm64" }
+$Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+    "X64"   { "amd64" }
+    "Arm64" { "arm64" }
     default { Write-Err "Unsupported architecture: $_" }
 }
 
