@@ -49,6 +49,16 @@ Custom install location:
 curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/scripts/install.sh | SONAR_INSTALL_DIR=/usr/local/bin bash
 ```
 
+Install a specific version:
+
+```sh
+curl -sfL https://raw.githubusercontent.com/raskrebs/sonar/main/scripts/install.sh | SONAR_VERSION=vX.Y.Z bash
+```
+
+```powershell
+$env:SONAR_VERSION="vX.Y.Z"; irm https://raw.githubusercontent.com/raskrebs/sonar/main/scripts/install.ps1 | iex
+```
+
 ### Using Go
 
 ```sh
