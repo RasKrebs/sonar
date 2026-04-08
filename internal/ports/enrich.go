@@ -24,6 +24,10 @@ func Enrich(pp []ListeningPort) {
 			pp[i].IsApp = isDesktopApp(pp[i].Command, pp[i].Process, pp[i].PID)
 		}
 	}
+
+	// Collect parent cmdlines, cwds and service-manager labels so DisplayName
+	// can resolve meaningful names without doing any I/O itself.
+	enrichDisplayNameSignals(pp)
 }
 
 // EnrichStats populates CPU, memory, threads, uptime, state, and connections.
