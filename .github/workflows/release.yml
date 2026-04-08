@@ -178,7 +178,6 @@ jobs:
         working-directory: tap
         env:
           TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet; then
@@ -187,12 +186,6 @@ jobs:
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "bump-${TAG}"
           git add Formula/sonar.rb
           git commit -m "sonar ${TAG}"
-          git push origin "bump-${TAG}"
-          gh pr create \
-            --title "sonar ${TAG}" \
-            --body "Automated formula bump for sonar ${TAG}." \
-            --base main \
-            --head "bump-${TAG}"
+          git push origin main
