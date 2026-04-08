@@ -83,6 +83,12 @@ func batchGetServiceUnits(pids []int) map[int]string {
 		if strings.HasPrefix(label, "0x") || label == "-" {
 			continue
 		}
+		// Skip GUI app labels: launchd labels for sandboxed apps look like
+		// "application.com.spotify.client.5607150.5607671" — verbose, unstable,
+		// and never as good as the .app bundle name we get from the cmdline.
+		if strings.HasPrefix(label, "application.") {
+			continue
+		}
 		result[pid] = label
 	}
 	return result

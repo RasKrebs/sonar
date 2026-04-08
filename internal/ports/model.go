@@ -81,6 +81,17 @@ func (lp *ListeningPort) DisplayName() string {
 	if lp.DockerContainer != "" {
 		return lp.DockerContainer
 	}
+	// Desktop apps: their cmdline already yields a clean .app bundle name
+	// and their cwd / launchd label point to internal app state, not a
+	// project. Skip the supervisor / cwd / service-unit signals for them.
+	if lp.IsApp {
+		if lp.Command != "" {
+			if name := interpreterAwareBasename(lp.Command); name != "" {
+				return name
+			}
+		}
+		return lp.Process
+	}
 	if lp.ServiceUnit != "" {
 		return lp.ServiceUnit
 	}
