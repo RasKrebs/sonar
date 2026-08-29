@@ -11,6 +11,10 @@ import (
 
 // KillPID terminates a process by PID using taskkill.
 func KillPID(pid int, force bool) error {
+	if pid <= 0 {
+		return fmt.Errorf("refusing to signal invalid PID %d", pid)
+	}
+
 	args := []string{"/PID", strconv.Itoa(pid)}
 	if force {
 		args = append([]string{"/F"}, args...)

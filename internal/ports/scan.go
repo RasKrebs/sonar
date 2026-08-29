@@ -223,25 +223,7 @@ func parseSS(output string) []ListeningPort {
 			ipVersion = "IPv6"
 		}
 
-		pid := 0
-		process := ""
-		for _, f := range fields {
-			if strings.HasPrefix(f, "users:") {
-				if pidIdx := strings.Index(f, "pid="); pidIdx >= 0 {
-					pidStr := f[pidIdx+4:]
-					if commaIdx := strings.IndexByte(pidStr, ','); commaIdx >= 0 {
-						pidStr = pidStr[:commaIdx]
-					}
-					pid, _ = strconv.Atoi(pidStr)
-				}
-				if nameStart := strings.Index(f, "((\""); nameStart >= 0 {
-					nameStr := f[nameStart+3:]
-					if nameEnd := strings.IndexByte(nameStr, '"'); nameEnd >= 0 {
-						process = nameStr[:nameEnd]
-					}
-				}
-			}
-		}
+		pid, process := parseSSUsers(line)
 
 		results = append(results, ListeningPort{
 			Port:        port,
@@ -253,4 +235,37 @@ func parseSS(output string) []ListeningPort {
 	}
 
 	return results
+}
+
+// parseSSUsers extracts the process name and PID from an ss -p users: blob.
+//
+// The blob must be read from the raw line, not from strings.Fields tokens.
+// Linux comm values can contain spaces (Next.js sets process.title to
+// "next-server (v…)", truncated to 15 bytes as "next-server (v1"), and
+// splitting on whitespace separates "users:(("name" from ",pid=N,fd=…)".
+func parseSSUsers(line string) (pid int, process string) {
+	usersIdx := strings.Index(line, "users:")
+	if usersIdx < 0 {
+		return 0, ""
+	}
+	blob := line[usersIdx:]
+
+	if pidIdx := strings.Index(blob, "pid="); pidIdx >= 0 {
+		pidStr := blob[pidIdx+4:]
+		end := 0
+		for end < len(pidStr) && pidStr[end] >= '0' && pidStr[end] <= '9' {
+			end++
+		}
+		if end > 0 {
+			pid, _ = strconv.Atoi(pidStr[:end])
+		}
+	}
+
+	if nameStart := strings.Index(blob, `(("`); nameStart >= 0 {
+		nameStr := blob[nameStart+3:]
+		if nameEnd := strings.IndexByte(nameStr, '"'); nameEnd >= 0 {
+			process = nameStr[:nameEnd]
+		}
+	}
+	return pid, process
 }
