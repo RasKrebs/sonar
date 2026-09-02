@@ -3,6 +3,9 @@
 // and tests decide where files land.
 package install
 
+// BinaryName is the name of the sonar executable on PATH.
+const BinaryName = "sonar"
+
 // SkillName is the directory and frontmatter name of the bundled skill.
 const SkillName = "sonar"
 
