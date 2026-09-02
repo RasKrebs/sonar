@@ -46,6 +46,47 @@ node    1234 user    7u  IPv4  1234568      0t0  TCP *:3000 (LISTEN)
 	}
 }
 
+func TestParseSS_ProcessNameWithSpaces(t *testing.T) {
+	// Next.js sets process.title to "next-server (v16.2.6)"; Linux truncates
+	// comm to 15 bytes ("next-server (v1"), so ss -p emits a quoted name that
+	// contains a space. strings.Fields must not be used to parse that blob.
+	output := `State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      511    *:3011             *:*    users:(("next-server (v1",pid=113211,fd=22))
+LISTEN 0      128    127.0.0.1:3000     0.0.0.0:* users:(("node",pid=1234,fd=18))
+LISTEN 0      128    *:8080             *:*
+`
+	results := parseSS(output)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(results))
+	}
+
+	byPort := map[int]ListeningPort{}
+	for _, r := range results {
+		byPort[r.Port] = r
+	}
+
+	next := byPort[3011]
+	if next.PID != 113211 {
+		t.Errorf("port 3011 PID = %d, want 113211", next.PID)
+	}
+	if next.Process != "next-server (v1" {
+		t.Errorf("port 3011 process = %q, want %q", next.Process, "next-server (v1")
+	}
+	if next.BindAddress != "0.0.0.0" {
+		t.Errorf("port 3011 bind = %q, want 0.0.0.0", next.BindAddress)
+	}
+
+	node := byPort[3000]
+	if node.PID != 1234 || node.Process != "node" {
+		t.Errorf("port 3000 = pid %d name %q, want pid 1234 name node", node.PID, node.Process)
+	}
+
+	idle := byPort[8080]
+	if idle.PID != 0 || idle.Process != "" {
+		t.Errorf("port 8080 = pid %d name %q, want empty users blob", idle.PID, idle.Process)
+	}
+}
+
 func TestParseSS_MultipleBindsSamePort(t *testing.T) {
 	output := `State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
 LISTEN 0      128    127.0.0.2:8080       0.0.0.0:*     users:(("nc",pid=1001,fd=3))
