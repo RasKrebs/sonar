@@ -87,6 +87,53 @@ LISTEN 0      128    *:8080             *:*
 	}
 }
 
+func TestParseSS_UsersBlobVariants(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		wantProcess string
+		wantPID     int
+	}{
+		{
+			name:        "one entry per file descriptor",
+			line:        `LISTEN 0      128    0.0.0.0:80    0.0.0.0:*    users:(("nginx",pid=1234,fd=6),("nginx",pid=1235,fd=6))`,
+			wantProcess: "nginx",
+			wantPID:     1234,
+		},
+		{
+			// A process title can contain anything, including "pid=". The real
+			// PID is the one after the closing quote, not the one in the name.
+			name:        "name containing pid=",
+			line:        `LISTEN 0      511    *:3011        *:*          users:(("worker pid=7",pid=99001,fd=22))`,
+			wantProcess: "worker pid=7",
+			wantPID:     99001,
+		},
+		{
+			name:        "iproute2 without pid label",
+			line:        `LISTEN 0      128    0.0.0.0:22    0.0.0.0:*    users:(("sshd",987,3))`,
+			wantProcess: "sshd",
+			wantPID:     987,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := "State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n" + tt.line + "\n"
+			results := parseSS(output)
+
+			if len(results) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(results))
+			}
+			if results[0].Process != tt.wantProcess {
+				t.Errorf("Process = %q, want %q", results[0].Process, tt.wantProcess)
+			}
+			if results[0].PID != tt.wantPID {
+				t.Errorf("PID = %d, want %d", results[0].PID, tt.wantPID)
+			}
+		})
+	}
+}
+
 func TestParseSS_MultipleBindsSamePort(t *testing.T) {
 	output := `State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
 LISTEN 0      128    127.0.0.2:8080       0.0.0.0:*     users:(("nc",pid=1001,fd=3))
