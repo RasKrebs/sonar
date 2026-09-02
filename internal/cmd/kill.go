@@ -51,6 +51,10 @@ var killCmd = &cobra.Command{
 			return nil
 		}
 
+		if lp.PID <= 0 {
+			return fmt.Errorf("could not resolve the process listening on port %d \u2014 re-run with sudo for full visibility", port)
+		}
+
 		sigName := "SIGTERM"
 		if forceFlag {
 			sigName = "SIGKILL"
