@@ -111,6 +111,15 @@ func TestDetectNegatives(t *testing.T) {
 		"npx prettier --write .",
 		"docker compose up -d",
 		"make build",
+		// informational flags never start a server
+		"vite --version",
+		"vite -v",
+		"vite --help",
+		"vite -h",
+		"uvicorn --version",
+		"http-server --help",
+		"webpack-dev-server --version",
+		"next dev --help",
 		// already managed
 		"sonar start -- npm run dev",
 		"sonar start --group web -- vite",

@@ -114,6 +114,26 @@ var runners = [][]string{
 	{"time"},
 }
 
+// infoFlags ask a command to print something and exit. `vite --version` is
+// not a dev server, whatever the rest of the rule says.
+var infoFlags = map[string]bool{
+	"--version": true,
+	"--help":    true,
+	"-v":        true,
+	"-V":        true,
+	"-h":        true,
+}
+
+// isInformational reports whether the arguments only ask for version or help.
+func isInformational(args []string) bool {
+	for _, a := range args {
+		if infoFlags[a] {
+			return true
+		}
+	}
+	return false
+}
+
 // maxRunnerDepth bounds how many transparent prefixes are peeled.
 const maxRunnerDepth = 3
 
@@ -142,6 +162,9 @@ func matchTokens(tokens []string, depth int) (string, bool) {
 		return "", false
 	}
 	args := tokens[1:]
+	if isInformational(args) {
+		return "", false
+	}
 
 	for _, r := range pkgRules {
 		if r.Cmd == name {
