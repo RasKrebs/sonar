@@ -237,35 +237,41 @@ func parseSS(output string) []ListeningPort {
 	return results
 }
 
-// parseSSUsers extracts the process name and PID from an ss -p users: blob.
+// parseSSUsers extracts the process name and PID from an ss -p users: blob,
+// which looks like:
+//
+//	users:(("nginx",pid=1234,fd=6),("nginx",pid=1235,fd=6))
 //
 // The blob must be read from the raw line, not from strings.Fields tokens.
 // Linux comm values can contain spaces (Next.js sets process.title to
 // "next-server (v…)", truncated to 15 bytes as "next-server (v1"), and
 // splitting on whitespace separates "users:(("name" from ",pid=N,fd=…)".
+//
+// The name is read first and the PID only from what follows it, so a process
+// title that itself contains "pid=" cannot be mistaken for the real PID. Only
+// the first entry is used; ss lists one per file descriptor.
 func parseSSUsers(line string) (pid int, process string) {
-	usersIdx := strings.Index(line, "users:")
-	if usersIdx < 0 {
+	nameStart := strings.Index(line, `users:(("`)
+	if nameStart < 0 {
 		return 0, ""
 	}
-	blob := line[usersIdx:]
+	entry := line[nameStart+len(`users:(("`):]
 
-	if pidIdx := strings.Index(blob, "pid="); pidIdx >= 0 {
-		pidStr := blob[pidIdx+4:]
-		end := 0
-		for end < len(pidStr) && pidStr[end] >= '0' && pidStr[end] <= '9' {
-			end++
-		}
-		if end > 0 {
-			pid, _ = strconv.Atoi(pidStr[:end])
-		}
+	nameEnd := strings.Index(entry, `",`)
+	if nameEnd < 0 {
+		return 0, ""
+	}
+	process = entry[:nameEnd]
+
+	// iproute2 before v4.0 omits the "pid=" label and prints a bare number.
+	rest := strings.TrimPrefix(entry[nameEnd+2:], "pid=")
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end > 0 {
+		pid, _ = strconv.Atoi(rest[:end])
 	}
 
-	if nameStart := strings.Index(blob, `(("`); nameStart >= 0 {
-		nameStr := blob[nameStart+3:]
-		if nameEnd := strings.IndexByte(nameStr, '"'); nameEnd >= 0 {
-			process = nameStr[:nameEnd]
-		}
-	}
 	return pid, process
 }

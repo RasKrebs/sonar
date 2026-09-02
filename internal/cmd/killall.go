@@ -85,6 +85,11 @@ Examples:
 					continue
 				}
 			} else {
+				if p.PID <= 0 {
+					errors = append(errors, fmt.Sprintf("port %d: could not resolve the listening process \u2014 re-run with sudo for full visibility", p.Port))
+					continue
+				}
+
 				sigName := "SIGTERM"
 				if killAllForceFlag {
 					sigName = "SIGKILL"

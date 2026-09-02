@@ -87,6 +87,11 @@ var downCmd = &cobra.Command{
 					continue
 				}
 			} else {
+				if p.PID <= 0 {
+					errs = append(errs, fmt.Sprintf("port %d: could not resolve the listening process \u2014 re-run with sudo for full visibility", p.Port))
+					continue
+				}
+
 				sigName := "SIGTERM"
 				if downForceFlag {
 					sigName = "SIGKILL"
