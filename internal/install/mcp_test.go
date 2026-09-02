@@ -2,6 +2,7 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +229,217 @@ func TestInstallMCPCursorScopes(t *testing.T) {
 	}
 	if _, err := os.Stat(res.Path); err != nil {
 		t.Errorf("user scope file not created: %v", err)
+	}
+}
+
+func TestInstallMCPUninstallRemovesOnlySonar(t *testing.T) {
+	root, _, opts := newRepo(t)
+	path := filepath.Join(root, ".mcp.json")
+	existing := "{\n  \"mcpServers\": {\n    \"other\": {\n      \"command\": \"other-server\"\n    }\n  },\n  \"keepMe\": true\n}\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallMCP(opts); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	opts.Uninstall = true
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if res.Action != ActionRemoved {
+		t.Errorf("Action = %q, want %q", res.Action, ActionRemoved)
+	}
+
+	got := readFile(t, path)
+	if strings.Contains(got, `"sonar"`) {
+		t.Errorf("sonar entry survived uninstall:\n%s", got)
+	}
+	if !strings.Contains(got, `"other-server"`) || !strings.Contains(got, `"keepMe"`) {
+		t.Errorf("uninstall removed more than sonar's entry:\n%s", got)
+	}
+	obj, err := ParseObject([]byte(got))
+	if err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	servers, _ := obj.Object("mcpServers")
+	if keys := servers.Keys(); !equalStrings(keys, []string{"other"}) {
+		t.Errorf("server keys = %v, want [other]", keys)
+	}
+}
+
+func TestInstallMCPUninstallIsIdempotentAndAbsentIsNoError(t *testing.T) {
+	root, _, opts := newRepo(t)
+	path := filepath.Join(root, ".mcp.json")
+	opts.Uninstall = true
+
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("uninstall with no file: %v", err)
+	}
+	if res.Action != ActionAbsent {
+		t.Errorf("Action = %q, want %q", res.Action, ActionAbsent)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("uninstall created a file that did not exist")
+	}
+
+	opts.Uninstall = false
+	if _, err := InstallMCP(opts); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	opts.Uninstall = true
+	if _, err := InstallMCP(opts); err != nil {
+		t.Fatalf("first uninstall: %v", err)
+	}
+	after := readFile(t, path)
+	res, err = InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("second uninstall: %v", err)
+	}
+	if res.Action != ActionAbsent {
+		t.Errorf("second uninstall Action = %q, want %q", res.Action, ActionAbsent)
+	}
+	if again := readFile(t, path); again != after {
+		t.Errorf("second uninstall changed the file:\n%q\n%q", after, again)
+	}
+}
+
+func TestInstallMCPPrintWritesNothingToDisk(t *testing.T) {
+	root, _, opts := newRepo(t)
+	path := filepath.Join(root, ".mcp.json")
+	opts.Print = true
+
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("InstallMCP: %v", err)
+	}
+	if res.Action != ActionPrinted {
+		t.Errorf("Action = %q, want %q", res.Action, ActionPrinted)
+	}
+	if !strings.Contains(res.Output, `"mcpServers"`) || !strings.Contains(res.Output, `"sonar"`) {
+		t.Errorf("Output does not contain the entry:\n%s", res.Output)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("--print created %s", path)
+	}
+
+	// --print over an existing file leaves it byte-identical.
+	existing := "{\n  \"mcpServers\": {\n    \"other\": {\n      \"command\": \"other-server\"\n    }\n  }\n}\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallMCP(opts); err != nil {
+		t.Fatalf("InstallMCP over existing: %v", err)
+	}
+	if got := readFile(t, path); got != existing {
+		t.Errorf("--print modified an existing file:\n%s", got)
+	}
+}
+
+func TestInstallMCPGenericPrintsSnippet(t *testing.T) {
+	_, _, opts := newRepo(t)
+	opts.Client = ClientGeneric
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("InstallMCP: %v", err)
+	}
+	if res.Action != ActionPrinted {
+		t.Errorf("Action = %q, want %q", res.Action, ActionPrinted)
+	}
+	var doc map[string]map[string]struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &doc); err != nil {
+		t.Fatalf("snippet is not valid JSON: %v\n%s", err, res.Output)
+	}
+	if doc["mcpServers"]["sonar"].Command != "sonar" {
+		t.Errorf("snippet = %s", res.Output)
+	}
+}
+
+func TestInstallMCPClaudeUserScopeRunsClaudeCLI(t *testing.T) {
+	_, _, opts := newRepo(t)
+	opts.Scope = ScopeUser
+	opts.Binary = "/opt/bin/sonar"
+	var ran []string
+	opts.LookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	opts.Run = func(argv []string) error { ran = argv; return nil }
+
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("InstallMCP: %v", err)
+	}
+	if res.Action != ActionRan {
+		t.Errorf("Action = %q, want %q", res.Action, ActionRan)
+	}
+	want := []string{"claude", "mcp", "add", "--scope", "user", "sonar", "--", "/opt/bin/sonar", "mcp"}
+	if !equalStrings(ran, want) {
+		t.Errorf("ran %v, want %v", ran, want)
+	}
+}
+
+func TestInstallMCPClaudeUserScopeMissingCLIErrorsWithCommand(t *testing.T) {
+	_, _, opts := newRepo(t)
+	opts.Scope = ScopeUser
+	opts.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	opts.Run = func([]string) error {
+		t.Fatal("Run must not be called when the CLI is missing")
+		return nil
+	}
+
+	res, err := InstallMCP(opts)
+	if !errors.Is(err, ErrClientCLIMissing) {
+		t.Fatalf("err = %v, want ErrClientCLIMissing", err)
+	}
+	if !strings.Contains(res.Output, "claude mcp add --scope user sonar -- sonar mcp") {
+		t.Errorf("Output should show the command to run, got:\n%s", res.Output)
+	}
+}
+
+func TestInstallMCPCodexMissingCLIPrintsTOML(t *testing.T) {
+	_, _, opts := newRepo(t)
+	opts.Client = ClientCodex
+	opts.Scope = ScopeUser
+	opts.LookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	opts.Run = func([]string) error {
+		t.Fatal("Run must not be called when the CLI is missing")
+		return nil
+	}
+
+	res, err := InstallMCP(opts)
+	if !errors.Is(err, ErrClientCLIMissing) {
+		t.Fatalf("err = %v, want ErrClientCLIMissing", err)
+	}
+	if !strings.Contains(res.Output, "[mcp_servers.sonar]") {
+		t.Errorf("Output should carry the TOML block, got:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, `command = "sonar"`) {
+		t.Errorf("TOML block missing command line:\n%s", res.Output)
+	}
+}
+
+func TestInstallMCPCommandClientPrintDoesNotRun(t *testing.T) {
+	_, _, opts := newRepo(t)
+	opts.Client = ClientCodex
+	opts.Scope = ScopeUser
+	opts.Print = true
+	opts.LookPath = func(string) (string, error) {
+		t.Fatal("LookPath must not be called for --print")
+		return "", nil
+	}
+	opts.Run = func([]string) error {
+		t.Fatal("Run must not be called for --print")
+		return nil
+	}
+
+	res, err := InstallMCP(opts)
+	if err != nil {
+		t.Fatalf("InstallMCP: %v", err)
+	}
+	if got := strings.TrimSpace(res.Output); got != "codex mcp add sonar -- sonar mcp" {
+		t.Errorf("Output = %q", got)
 	}
 }
