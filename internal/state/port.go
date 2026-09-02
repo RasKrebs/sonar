@@ -1,0 +1,116 @@
+// Package state holds the daemon's published data model. These structs are the
+// JSON wire shape for `sonar list --json`, state.snapshot and state.delta.
+// Field names and JSON tags are the contract; see
+// docs/specs/2026-09-02-cross-spec-contract.md.
+package state
+
+import "fmt"
+
+// PortType classifies a listening socket. Contract §9 adds "proxy" for rows
+// owned by the daemon's own TCP/HTTP proxies (spec 3).
+type PortType string
+
+const (
+	TypeSystem PortType = "system"
+	TypeUser   PortType = "user"
+	TypeDocker PortType = "docker"
+	TypeProxy  PortType = "proxy"
+)
+
+// AllPortTypes is the enum used by schema generation.
+var AllPortTypes = []PortType{TypeSystem, TypeUser, TypeDocker, TypeProxy}
+
+// GroupSource records how a port's group was decided. Precedence, highest
+// first: manual > start > file > auto (compose / git root).
+type GroupSource string
+
+const (
+	SourceAuto   GroupSource = "auto"
+	SourceFile   GroupSource = "file"
+	SourceManual GroupSource = "manual"
+	SourceStart  GroupSource = "start"
+)
+
+// AllGroupSources is the enum used by schema generation.
+var AllGroupSources = []GroupSource{SourceAuto, SourceFile, SourceManual, SourceStart}
+
+// Stats is resource usage for the owning process. Null unless the caller
+// opted into stats collection.
+type Stats struct {
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemoryRSS   int64   `json:"memory_rss_bytes"`
+	ThreadCount int     `json:"thread_count"`
+	Uptime      string  `json:"uptime"`
+	State       string  `json:"state"`
+	Connections int     `json:"connections"`
+}
+
+// Health is the result of an HTTP probe. Null unless health was collected.
+type Health struct {
+	Status    string `json:"status"` // ok | fail | unknown
+	Code      int    `json:"code"`
+	LatencyMs int64  `json:"latency_ms"`
+}
+
+// Docker describes the container behind a published port. Null for native
+// processes.
+type Docker struct {
+	Container      string `json:"container"`
+	Image          string `json:"image"`
+	ComposeService string `json:"compose_service"`
+	ComposeProject string `json:"compose_project"`
+	ContainerPort  int    `json:"container_port"`
+}
+
+// Run attributes a port to a process sonar started. Null for anything else.
+type Run struct {
+	ID      string `json:"id"`
+	Group   string `json:"group"`
+	Name    string `json:"name"`
+	RootPID int    `json:"root_pid"`
+}
+
+// Session is owned by spec 2; the daemon only carries it.
+type Session struct {
+	ID       string `json:"id"`
+	Tool     string `json:"tool"`
+	Label    string `json:"label"`
+	Worktree string `json:"worktree"`
+	Branch   string `json:"branch"`
+	Detected bool   `json:"detected"`
+}
+
+// Port is one listening socket as published by the daemon. Clients render
+// DisplayName and never derive their own name.
+type Port struct {
+	Port        int          `json:"port"`
+	BindAddress string       `json:"bind_address"`
+	IPVersion   string       `json:"ip_version"`
+	URL         string       `json:"url"`
+	PID         int          `json:"pid"`
+	PPID        int          `json:"ppid"`
+	Process     string       `json:"process"`
+	DisplayName string       `json:"display_name"`
+	Name        *string      `json:"name"`
+	Command     string       `json:"command"`
+	Cwd         string       `json:"cwd"`
+	ProjectRoot *string      `json:"project_root"`
+	Group       *string      `json:"group"`
+	GroupSource *GroupSource `json:"group_source"`
+	Session     *Session     `json:"session"`
+	Type        PortType     `json:"type"`
+	IsApp       bool         `json:"is_app"`
+	User        string       `json:"user"`
+	ServiceUnit *string      `json:"service_unit"`
+	Run         *Run         `json:"run"`
+	Stats       *Stats       `json:"stats"`
+	Health      *Health      `json:"health"`
+	Docker      *Docker      `json:"docker"`
+	ExposedURLs []string     `json:"exposed_urls"`
+	ProxyID     *string      `json:"proxy_id"`
+	ProxyTarget *int         `json:"proxy_target_port"`
+	StartedAt   *string      `json:"started_at"`
+}
+
+// Key is the delta identity: "<port>:<bind_address>".
+func (p Port) Key() string { return fmt.Sprintf("%d:%s", p.Port, p.BindAddress) }
