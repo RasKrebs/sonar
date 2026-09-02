@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestHookSessionStartWritesEnvFile(t *testing.T) {
@@ -144,4 +146,46 @@ func TestHookPreBashWithGarbageInputIsANoop(t *testing.T) {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func TestInstallSubcommandsAreRegistered(t *testing.T) {
+	var install *cobra.Command
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "install" {
+			install = c
+		}
+	}
+	if install == nil {
+		t.Fatal("`sonar install` is not registered")
+	}
+	want := map[string]bool{"skills": false, "hooks": false}
+	for _, c := range install.Commands() {
+		if _, ok := want[c.Name()]; ok {
+			want[c.Name()] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("`sonar install %s` is not registered", name)
+		}
+	}
+}
+
+// Hooks run on every Bash tool call, so they must not inherit the root
+// command's config loading: a warning on stderr would be printed each time.
+func TestHookCommandsDoNotLoadConfig(t *testing.T) {
+	if hookCmd.PersistentPreRun == nil {
+		t.Fatal("hookCmd must override the root PersistentPreRun to stay silent")
+	}
+}
+
+func TestHookPreBashDoesNotEscapeTheAdvice(t *testing.T) {
+	var out bytes.Buffer
+	in := strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"npm run dev"}}`)
+	if err := runHookPreBash(in, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "sonar wait <port>") {
+		t.Errorf("advice was HTML-escaped and is hard to read:\n%s", out.String())
+	}
 }

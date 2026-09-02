@@ -41,6 +41,11 @@ var hookPreBashCmd = &cobra.Command{
 }
 
 func init() {
+	// Hooks run on every Bash tool call and their stdout/stderr end up in the
+	// agent's transcript, so they must stay silent. Overriding the root
+	// PersistentPreRun (cobra runs only the closest one in the chain) skips
+	// config loading and its warnings; hooks need neither.
+	hookCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {}
 	hookCmd.AddCommand(hookSessionStartCmd, hookPreBashCmd)
 	rootCmd.AddCommand(hookCmd)
 }
@@ -119,7 +124,10 @@ func runHookPreBash(stdin io.Reader, stdout io.Writer) error {
 			"additionalContext": advice(m),
 		},
 	}
-	_ = json.NewEncoder(stdout).Encode(out)
+	enc := json.NewEncoder(stdout)
+	// The advice is read by a human in the transcript; \u003c helps nobody.
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(out)
 	return nil
 }
 
