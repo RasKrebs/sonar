@@ -7,20 +7,20 @@ type Service struct {
 	Name       string   `json:"name"`
 	Cmd        string   `json:"cmd"`
 	Cwd        string   `json:"cwd"`
-	Port       *int     `json:"port"`
-	Health     *string  `json:"health"`
+	Port       *int     `json:"port" jsonschema:"nullable"`
+	Health     *string  `json:"health" jsonschema:"nullable"`
 	DependsOn  []string `json:"depends_on"`
 	Running    bool     `json:"running"`
-	PortActual *int     `json:"port_actual"`
+	PortActual *int     `json:"port_actual" jsonschema:"nullable"`
 }
 
 // Group is a set of ports that belong to one project. Members are port
 // numbers; clients join them against the ports list.
 type Group struct {
 	Name       string      `json:"name"`
-	Source     GroupSource `json:"source"`
-	RootDir    *string     `json:"root_dir"`
-	ConfigPath *string     `json:"config_path"`
+	Source     GroupSource `json:"source" jsonschema:"enum=auto,enum=file,enum=manual,enum=start"`
+	RootDir    *string     `json:"root_dir" jsonschema:"nullable"`
+	ConfigPath *string     `json:"config_path" jsonschema:"nullable"`
 	Status     string      `json:"status"` // running | partial | stopped
 	Members    []int       `json:"members"`
 	Services   []Service   `json:"services"`
@@ -32,8 +32,8 @@ type Group struct {
 type Tunnel struct {
 	ID            string  `json:"id"`
 	TargetPort    int     `json:"target_port"`
-	TargetGroup   *string `json:"target_group"`
-	TargetService *string `json:"target_service"`
+	TargetGroup   *string `json:"target_group" jsonschema:"nullable"`
+	TargetService *string `json:"target_service" jsonschema:"nullable"`
 	Provider      string  `json:"provider"`
 	Scope         string  `json:"scope"`
 	PublicURL     string  `json:"public_url"`
@@ -43,7 +43,7 @@ type Tunnel struct {
 	StatusReason  string  `json:"status_reason"`
 	Persist       bool    `json:"persist"`
 	CreatedAt     string  `json:"created_at"`
-	ExpiresAt     *string `json:"expires_at"`
+	ExpiresAt     *string `json:"expires_at" jsonschema:"nullable"`
 	PID           int     `json:"pid"`
 	Requests      int64   `json:"requests"`
 }

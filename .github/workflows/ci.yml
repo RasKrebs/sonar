@@ -47,3 +47,16 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+  schema:
+    name: Protocol schema up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Regenerate protocol schema
+        run: go generate ./... && git diff --exit-code docs/schema

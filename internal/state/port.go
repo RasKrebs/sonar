@@ -91,25 +91,25 @@ type Port struct {
 	PPID        int          `json:"ppid"`
 	Process     string       `json:"process"`
 	DisplayName string       `json:"display_name"`
-	Name        *string      `json:"name"`
+	Name        *string      `json:"name" jsonschema:"nullable"`
 	Command     string       `json:"command"`
 	Cwd         string       `json:"cwd"`
-	ProjectRoot *string      `json:"project_root"`
-	Group       *string      `json:"group"`
-	GroupSource *GroupSource `json:"group_source"`
-	Session     *Session     `json:"session"`
-	Type        PortType     `json:"type"`
+	ProjectRoot *string      `json:"project_root" jsonschema:"nullable"`
+	Group       *string      `json:"group" jsonschema:"nullable"`
+	GroupSource *GroupSource `json:"group_source" jsonschema:"nullable,enum=auto,enum=file,enum=manual,enum=start"`
+	Session     *Session     `json:"session" jsonschema:"nullable"`
+	Type        PortType     `json:"type" jsonschema:"enum=system,enum=user,enum=docker,enum=proxy"`
 	IsApp       bool         `json:"is_app"`
 	User        string       `json:"user"`
-	ServiceUnit *string      `json:"service_unit"`
-	Run         *Run         `json:"run"`
-	Stats       *Stats       `json:"stats"`
-	Health      *Health      `json:"health"`
-	Docker      *Docker      `json:"docker"`
+	ServiceUnit *string      `json:"service_unit" jsonschema:"nullable"`
+	Run         *Run         `json:"run" jsonschema:"nullable"`
+	Stats       *Stats       `json:"stats" jsonschema:"nullable"`
+	Health      *Health      `json:"health" jsonschema:"nullable"`
+	Docker      *Docker      `json:"docker" jsonschema:"nullable"`
 	ExposedURLs []string     `json:"exposed_urls"`
-	ProxyID     *string      `json:"proxy_id"`
-	ProxyTarget *int         `json:"proxy_target_port"`
-	StartedAt   *string      `json:"started_at"`
+	ProxyID     *string      `json:"proxy_id" jsonschema:"nullable"`
+	ProxyTarget *int         `json:"proxy_target_port" jsonschema:"nullable"`
+	StartedAt   *string      `json:"started_at" jsonschema:"nullable"`
 }
 
 // Key is the delta identity: "<port>:<bind_address>".
