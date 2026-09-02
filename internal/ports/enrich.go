@@ -3,7 +3,9 @@ package ports
 import (
 	"encoding/csv"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -351,6 +353,42 @@ func isWindowsDesktopApp(command string, process string, pid int) bool {
 		}
 	}
 	return false
+}
+
+// findGitRoot walks up from cwd looking for a .git entry: a directory in a
+// normal clone, a file in a worktree or submodule. Returns "" when cwd is empty
+// or no repository contains it. The depth bound guards against pathological
+// symlink loops.
+func findGitRoot(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	dir := filepath.Clean(cwd)
+	for i := 0; i < 64; i++ {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// deriveGroup infers the automatic group for a listener: the Compose project
+// when the port belongs to one, otherwise the base name of the git project
+// root. Returns ("", "") when nothing can be inferred; the full precedence
+// chain (manual > start > file > auto) arrives with the resolver in slice F2.
+func deriveGroup(lp *ListeningPort, projectRoot string) (name, source string) {
+	if lp.DockerComposeProject != "" {
+		return lp.DockerComposeProject, "auto"
+	}
+	if projectRoot != "" {
+		return filepath.Base(projectRoot), "auto"
+	}
+	return "", ""
 }
 
 // ClassifyPort returns PortTypeSystem for well-known ports (<1024), else PortTypeUser.

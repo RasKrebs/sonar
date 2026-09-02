@@ -11,6 +11,9 @@ const (
 	PortTypeSystem PortType = iota
 	PortTypeUser
 	PortTypeDocker
+	// PortTypeProxy marks a row owned by one of the daemon's own TCP/HTTP
+	// proxies (cross-spec contract §9).
+	PortTypeProxy
 )
 
 func (pt PortType) String() string {
@@ -21,6 +24,8 @@ func (pt PortType) String() string {
 		return "user"
 	case PortTypeDocker:
 		return "docker"
+	case PortTypeProxy:
+		return "proxy"
 	default:
 		return "unknown"
 	}
@@ -43,8 +48,17 @@ type ListeningPort struct {
 	// Tagged-run attribution: set when this listener (or one of its ancestors)
 	// was spawned via `sonar run --tag`. Populated during Enrich by walking the
 	// PPID ancestry against the runs registry.
-	Tag   string // caller-supplied label
-	RunID string // caller-supplied (or generated) stable run id
+	Tag        string // caller-supplied label
+	RunID      string // caller-supplied (or generated) stable run id
+	RunRootPID int    // pid of the `sonar run` ancestor that owns Tag/RunID
+
+	// Contract fields (cross-spec contract §5). Populated during Enrich.
+	PPID        int    // parent pid, from the ps -A table Enrich already builds
+	Name        string // user rename; always "" until slice F6 adds the store
+	ProjectRoot string // nearest ancestor of Cwd containing a .git entry
+	Group       string // inferred group name (compose project or project-root base name)
+	GroupSource string // "auto" | "file" | "manual" | "start"
+	StartedAt   string // RFC3339; from the runs registry or the parsed ps lstart
 
 	// Process stats
 	CPUPercent  float64 // CPU usage percentage

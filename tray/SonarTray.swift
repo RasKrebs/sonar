@@ -2,6 +2,26 @@ import AppKit
 
 // MARK: - JSON model matching `sonar list --json`
 
+// Nested objects from the cross-spec contract's `state.Port`. `sonar list
+// --json` emits these alongside the legacy flat fields; both are optional here
+// so the tray decodes output from any sonar version.
+struct SonarStats: Decodable {
+    let cpu_percent: Double?
+    let memory_rss_bytes: Int64?
+    let thread_count: Int?
+    let uptime: String?
+    let state: String?
+    let connections: Int?
+}
+
+struct SonarDocker: Decodable {
+    let container: String?
+    let image: String?
+    let compose_service: String?
+    let compose_project: String?
+    let container_port: Int?
+}
+
 struct SonarPort: Decodable {
     let port: Int
     let pid: Int
@@ -9,19 +29,48 @@ struct SonarPort: Decodable {
     let command: String?
     let user: String?
     let bind_address: String?
-    let type: String
-    let url: String
-    let cpu_percent: Double
-    let memory_rss_bytes: Int64
+    let type: String?
+    let url: String?
+
+    // Daemon-computed name. Clients render this and never derive their own.
+    let display_name: String?
+
+    // Contract nested objects (null when not collected).
+    let stats: SonarStats?
+    let docker: SonarDocker?
+
+    // Deprecated flat fields, kept optional; removed from sonar in slice F9.
+    let cpu_percent: Double?
+    let memory_rss_bytes: Int64?
     let thread_count: Int?
     let uptime: String?
     let state: String?
-    let connections: Int
+    let connections: Int?
     let docker_container: String?
     let docker_image: String?
     let docker_compose_service: String?
     let docker_compose_project: String?
     let docker_container_port: Int?
+}
+
+// Accessors that read the contract object first and fall back to the legacy
+// flat field, so the rest of the tray does not care which shape it got.
+extension SonarPort {
+    var cpu: Double { stats?.cpu_percent ?? cpu_percent ?? 0 }
+    var memory: Int64 { stats?.memory_rss_bytes ?? memory_rss_bytes ?? 0 }
+    var threads: Int { stats?.thread_count ?? thread_count ?? 0 }
+    var uptimeText: String? { stats?.uptime ?? uptime }
+    var stateText: String? { stats?.state ?? state }
+    var conns: Int { stats?.connections ?? connections ?? 0 }
+
+    var containerName: String? { docker?.container ?? docker_container }
+    var imageName: String? { docker?.image ?? docker_image }
+    var composeService: String? { docker?.compose_service ?? docker_compose_service }
+    var containerPort: Int? { docker?.container_port ?? docker_container_port }
+    var composeProject: String? { docker?.compose_project ?? docker_compose_project }
+
+    var kind: String { type ?? "user" }
+    var link: String { url ?? "http://localhost:\(port)" }
 }
 
 // MARK: - App Delegate
@@ -190,7 +239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             var idx = insertAfter
             let grouped = Dictionary(grouping: ports) { port -> String in
-                if let project = port.docker_compose_project, !project.isEmpty {
+                if let project = port.composeProject, !project.isEmpty {
                     return project
                 }
                 return ""
@@ -235,8 +284,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func buildPortItem(_ port: SonarPort) -> NSMenuItem {
         let name = displayName(port)
-        let mem = formatBytes(port.memory_rss_bytes)
-        let cpu = String(format: "%.1f%%", port.cpu_percent)
+        let mem = formatBytes(port.memory)
+        let cpu = String(format: "%.1f%%", port.cpu)
         let paddedPort = "\(port.port)".padding(toLength: 5, withPad: " ", startingAt: 0)
         let paddedName = name.padding(toLength: 20, withPad: " ", startingAt: 0)
         let label = "\(paddedPort)  \(paddedName)  \(cpu) cpu  \(mem) mem"
@@ -244,7 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let portItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
 
         let typeIcon: String
-        switch port.type {
+        switch port.kind {
         case "docker": typeIcon = "🐳"
         case "system": typeIcon = "⚙️"
         default: typeIcon = "▸"
@@ -261,19 +310,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let user = port.user, !user.isEmpty { addInfoItem(submenu, "User", user) }
         addInfoItem(submenu, "PID", "\(port.pid)")
         if let bind = port.bind_address, !bind.isEmpty { addInfoItem(submenu, "Bind", bind) }
-        if let state = port.state, !state.isEmpty { addInfoItem(submenu, "State", state) }
-        if let uptime = port.uptime, !uptime.isEmpty { addInfoItem(submenu, "Uptime", uptime) }
+        if let state = port.stateText, !state.isEmpty { addInfoItem(submenu, "State", state) }
+        if let uptime = port.uptimeText, !uptime.isEmpty { addInfoItem(submenu, "Uptime", uptime) }
         addInfoItem(submenu, "CPU", cpu)
         addInfoItem(submenu, "Memory", mem)
-        if let threads = port.thread_count, threads > 0 { addInfoItem(submenu, "Threads", "\(threads)") }
-        if port.connections > 0 { addInfoItem(submenu, "Connections", "\(port.connections)") }
+        if port.threads > 0 { addInfoItem(submenu, "Threads", "\(port.threads)") }
+        if port.conns > 0 { addInfoItem(submenu, "Connections", "\(port.conns)") }
 
-        if let container = port.docker_container, !container.isEmpty {
+        if let container = port.containerName, !container.isEmpty {
             submenu.addItem(NSMenuItem.separator())
             addInfoItem(submenu, "Container", container)
-            if let image = port.docker_image, !image.isEmpty { addInfoItem(submenu, "Image", image) }
-            if let service = port.docker_compose_service, !service.isEmpty { addInfoItem(submenu, "Service", service) }
-            if let cport = port.docker_container_port, cport > 0 { addInfoItem(submenu, "Container Port", "\(cport)") }
+            if let image = port.imageName, !image.isEmpty { addInfoItem(submenu, "Image", image) }
+            if let service = port.composeService, !service.isEmpty { addInfoItem(submenu, "Service", service) }
+            if let cport = port.containerPort, cport > 0 { addInfoItem(submenu, "Container Port", "\(cport)") }
         }
 
         submenu.addItem(NSMenuItem.separator())
@@ -290,7 +339,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         submenu.addItem(NSMenuItem.separator())
 
-        let killTitle = port.type == "docker" ? "Stop Container" : "Kill Process"
+        let killTitle = port.kind == "docker" ? "Stop Container" : "Kill Process"
         let killItem = NSMenuItem(title: killTitle, action: #selector(killPort(_:)), keyEquivalent: "")
         killItem.target = self
         killItem.representedObject = port
@@ -315,7 +364,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openPort(_ sender: NSMenuItem) {
         guard let port = sender.representedObject as? SonarPort else { return }
-        if let url = URL(string: port.url) {
+        if let url = URL(string: port.link) {
             NSWorkspace.shared.open(url)
         }
     }
@@ -323,14 +372,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func copyURL(_ sender: NSMenuItem) {
         guard let port = sender.representedObject as? SonarPort else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(port.url, forType: .string)
+        NSPasteboard.general.setString(port.link, forType: .string)
     }
 
     @objc private func killPort(_ sender: NSMenuItem) {
         guard let port = sender.representedObject as? SonarPort else { return }
 
         let name = displayName(port)
-        let action = port.type == "docker" ? "stop" : "kill"
+        let action = port.kind == "docker" ? "stop" : "kill"
 
         let alert = NSAlert()
         alert.messageText = "\(action.capitalized) port \(port.port)?"
@@ -360,10 +409,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Helpers
 
     private func displayName(_ port: SonarPort) -> String {
-        if let service = port.docker_compose_service, !service.isEmpty {
+        // The daemon computes display_name (rename > run name > compose service
+        // > container > service unit > resolved process name); prefer it and
+        // only fall back for output from a pre-F0 sonar.
+        if let name = port.display_name, !name.isEmpty {
+            return name
+        }
+        if let service = port.composeService, !service.isEmpty {
             return service
         }
-        if let container = port.docker_container, !container.isEmpty {
+        if let container = port.containerName, !container.isEmpty {
             return container
         }
         return port.process

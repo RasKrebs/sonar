@@ -37,18 +37,21 @@ func TestRunTagger_AncestryWalk(t *testing.T) {
 
 	tagger := newRunTagger()
 
-	tag, id, ok := tagger.lookup(400, pidInfo)
-	if !ok || tag != "demo" || id != "chg-1" {
-		t.Fatalf("descendant listener: got (%q,%q,%v), want (demo,chg-1,true)", tag, id, ok)
+	res := tagger.lookup(400, pidInfo)
+	if !res.ok || res.tag != "demo" || res.id != "chg-1" {
+		t.Fatalf("descendant listener: got %+v, want (demo,chg-1,true)", res)
+	}
+	if res.rootPID != runPID {
+		t.Fatalf("descendant listener rootPID = %d, want %d", res.rootPID, runPID)
 	}
 
 	// Direct hit on the run pid itself.
-	if tag, _, ok := tagger.lookup(runPID, pidInfo); !ok || tag != "demo" {
-		t.Errorf("direct pid: got (%q,%v), want (demo,true)", tag, ok)
+	if res := tagger.lookup(runPID, pidInfo); !res.ok || res.tag != "demo" {
+		t.Errorf("direct pid: got %+v, want (demo,true)", res)
 	}
 
 	// Unrelated tree is untagged.
-	if _, _, ok := tagger.lookup(500, pidInfo); ok {
+	if res := tagger.lookup(500, pidInfo); res.ok {
 		t.Error("unrelated process should not be tagged")
 	}
 }
@@ -57,7 +60,7 @@ func TestRunTagger_EmptyRegistryShortCircuits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no runs.json
 	tagger := newRunTagger()
 	pidInfo := map[int]pidEntry{42: {ppid: 1, cmd: "x"}}
-	if _, _, ok := tagger.lookup(42, pidInfo); ok {
+	if res := tagger.lookup(42, pidInfo); res.ok {
 		t.Error("empty registry should yield no tag")
 	}
 }
@@ -91,7 +94,7 @@ func TestRunTagger_CycleGuard(t *testing.T) {
 		10: {ppid: 11, cmd: "a"},
 		11: {ppid: 10, cmd: "b"},
 	}
-	if _, _, ok := tagger.lookup(10, pidInfo); ok {
+	if res := tagger.lookup(10, pidInfo); res.ok {
 		t.Error("cycle should not produce a tag")
 	}
 }

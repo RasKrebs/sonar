@@ -28,6 +28,9 @@ func parseDarwinStats(p *ListeningPort, fields []string) {
 	lstart := strings.Join(fields[3:], " ")
 	p.StartTime = lstart
 	p.Uptime = computeUptime(lstart)
+	if p.StartedAt == "" {
+		p.StartedAt = parseStartTime(lstart)
+	}
 
 	// macOS: get thread count via proc_info or ps -M
 	p.ThreadCount = countThreadsDarwin(p.PID)
@@ -53,6 +56,9 @@ func parseLinuxStats(p *ListeningPort, fields []string) {
 	lstart := strings.Join(fields[4:], " ")
 	p.StartTime = lstart
 	p.Uptime = computeUptime(lstart)
+	if p.StartedAt == "" {
+		p.StartedAt = parseStartTime(lstart)
+	}
 }
 
 // parseWindowsStats parses CSV fields from PowerShell Get-Process:
@@ -79,6 +85,9 @@ func parseWindowsStats(p *ListeningPort, fields []string) {
 		// StartTime is formatted as ISO 8601 via .ToString('o') in the PowerShell command
 		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
 			p.Uptime = formatDuration(time.Since(t))
+		}
+		if p.StartedAt == "" {
+			p.StartedAt = parseStartTime(startStr)
 		}
 	}
 }
@@ -179,6 +188,28 @@ func decodeState(s string) string {
 }
 
 // computeUptime parses an lstart string and returns a human-readable duration.
+// parseStartTime converts a raw ps lstart string (or the ISO-8601 timestamp
+// PowerShell reports on Windows) to RFC3339. Returns "" when it cannot be
+// parsed. `started_at` in the contract is RFC3339.
+func parseStartTime(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	layouts := []string{
+		"Mon Jan  2 15:04:05 2006",
+		"Mon Jan 2 15:04:05 2006",
+		time.RFC3339Nano,
+		time.RFC3339,
+	}
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return t.Format(time.RFC3339)
+		}
+	}
+	return ""
+}
+
 func computeUptime(lstart string) string {
 	// lstart format varies but common: "Wed Mar 18 10:30:00 2026"
 	layouts := []string{

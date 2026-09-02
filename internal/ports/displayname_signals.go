@@ -42,9 +42,12 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 		if pid <= 0 {
 			continue
 		}
-		if info, ok := pidInfo[pid]; ok && info.ppid > 1 {
-			if parent, ok := pidInfo[info.ppid]; ok {
-				pp[i].ParentCmd = parent.cmd
+		if info, ok := pidInfo[pid]; ok {
+			pp[i].PPID = info.ppid
+			if info.ppid > 1 {
+				if parent, ok := pidInfo[info.ppid]; ok {
+					pp[i].ParentCmd = parent.cmd
+				}
 			}
 		}
 		if cwd, ok := cwds[pid]; ok {
@@ -53,10 +56,19 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 		if unit, ok := units[pid]; ok {
 			pp[i].ServiceUnit = unit
 		}
-		if tag, id, ok := tagger.lookup(pid, pidInfo); ok {
-			pp[i].Tag = tag
-			pp[i].RunID = id
+		if run := tagger.lookup(pid, pidInfo); run.ok {
+			pp[i].Tag = run.tag
+			pp[i].RunID = run.id
+			pp[i].RunRootPID = run.rootPID
+			pp[i].StartedAt = run.startedAt
 		}
+	}
+
+	// 5. Project root and automatic group. Done after the loop above so that
+	//    Cwd and the Docker fields are already populated.
+	for i := range pp {
+		pp[i].ProjectRoot = findGitRoot(pp[i].Cwd)
+		pp[i].Group, pp[i].GroupSource = deriveGroup(&pp[i], pp[i].ProjectRoot)
 	}
 }
 

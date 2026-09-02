@@ -15,9 +15,11 @@ type runTagger struct {
 }
 
 type tagResult struct {
-	tag string
-	id  string
-	ok  bool
+	tag       string
+	id        string
+	rootPID   int    // pid of the registry entry the listener descends from
+	startedAt string // RFC3339, recorded when the run was registered
+	ok        bool
 }
 
 // newRunTagger loads (and prunes) the runs registry once. When the registry is
@@ -32,9 +34,9 @@ func newRunTagger() *runTagger {
 // lookup resolves the tag for a listener PID by walking up its ancestry using
 // the already-collected pidInfo map (pid -> {ppid, cmd}). No syscalls/exec are
 // performed here: the parent map is reused, and per-PID results are cached.
-func (t *runTagger) lookup(pid int, pidInfo map[int]pidEntry) (string, string, bool) {
+func (t *runTagger) lookup(pid int, pidInfo map[int]pidEntry) tagResult {
 	if t == nil || len(t.reg.Runs) == 0 {
-		return "", "", false
+		return tagResult{}
 	}
 	return t.walk(pid, pidInfo, 0)
 }
@@ -42,29 +44,28 @@ func (t *runTagger) lookup(pid int, pidInfo map[int]pidEntry) (string, string, b
 // walk recurses up the PPID chain, caching every PID it visits (positive and
 // negative) so shared ancestry is only resolved once. A depth bound guards
 // against pathological / cyclic process tables.
-func (t *runTagger) walk(pid int, pidInfo map[int]pidEntry, depth int) (string, string, bool) {
+func (t *runTagger) walk(pid int, pidInfo map[int]pidEntry, depth int) tagResult {
 	if pid <= 1 || depth > 64 {
-		return "", "", false
+		return tagResult{}
 	}
 	if cached, ok := t.cache[pid]; ok {
-		return cached.tag, cached.id, cached.ok
+		return cached
 	}
 
 	// Direct hit: this PID is itself a tagged run.
 	if e, ok := t.reg.LookupByPID(pid); ok {
-		res := tagResult{tag: e.Tag, id: e.ID, ok: true}
+		res := tagResult{tag: e.Tag, id: e.ID, rootPID: e.PID, startedAt: e.StartedAt, ok: true}
 		t.cache[pid] = res
-		return res.tag, res.id, res.ok
+		return res
 	}
 
 	// Otherwise climb to the parent.
 	info, ok := pidInfo[pid]
 	if !ok || info.ppid <= 1 || info.ppid == pid {
 		t.cache[pid] = tagResult{}
-		return "", "", false
+		return tagResult{}
 	}
-	tag, id, found := t.walk(info.ppid, pidInfo, depth+1)
-	res := tagResult{tag: tag, id: id, ok: found}
+	res := t.walk(info.ppid, pidInfo, depth+1)
 	t.cache[pid] = res
-	return res.tag, res.id, res.ok
+	return res
 }
