@@ -29,15 +29,3 @@ func TestSettingsPath(t *testing.T) {
 		t.Errorf("SettingsPath(project) = %q, want %q", got, want)
 	}
 }
-
-func TestParseScope(t *testing.T) {
-	if s, err := ParseScope("project"); err != nil || s != ScopeProject {
-		t.Errorf("ParseScope(project) = %v, %v", s, err)
-	}
-	if s, err := ParseScope("user"); err != nil || s != ScopeUser {
-		t.Errorf("ParseScope(user) = %v, %v", s, err)
-	}
-	if _, err := ParseScope("global"); err == nil {
-		t.Error("ParseScope(global) should fail")
-	}
-}

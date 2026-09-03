@@ -9,9 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Shared flags live on the parent `install` command so that every
-// `sonar install <what>` subcommand accepts the same client and scope
-// selection.
+// These flags belong to `install mcp`. They are not persistent on the parent:
+// `install skills` and `install hooks` support a different, smaller set of
+// clients and their own scope defaults, and inheriting these would have them
+// silently accept --cursor or --codex and ignore them.
 var (
 	installClaudeCode bool
 	installCursor     bool
@@ -48,14 +49,14 @@ Examples:
 }
 
 func init() {
-	installCmd.PersistentFlags().BoolVar(&installClaudeCode, "claude-code", false, "Configure Claude Code")
-	installCmd.PersistentFlags().BoolVar(&installCursor, "cursor", false, "Configure Cursor")
-	installCmd.PersistentFlags().BoolVar(&installCodex, "codex", false, "Configure Codex (user scope only)")
-	installCmd.PersistentFlags().BoolVar(&installGeneric, "generic", false, "Print a snippet for any MCP client")
-	installCmd.PersistentFlags().StringVar(&installScope, "scope", "project", "Where to write: project or user")
-	installCmd.PersistentFlags().BoolVar(&installPrint, "print", false, "Print what would be written instead of touching disk")
-	installCmd.PersistentFlags().BoolVar(&installUninstall, "uninstall", false, "Remove what sonar wrote")
-	installCmd.PersistentFlags().BoolVar(&installForce, "force", false, "Replace an entry sonar did not write")
+	installMCPCmd.Flags().BoolVar(&installClaudeCode, "claude-code", false, "Configure Claude Code")
+	installMCPCmd.Flags().BoolVar(&installCursor, "cursor", false, "Configure Cursor")
+	installMCPCmd.Flags().BoolVar(&installCodex, "codex", false, "Configure Codex (user scope only)")
+	installMCPCmd.Flags().BoolVar(&installGeneric, "generic", false, "Print a snippet for any MCP client")
+	installMCPCmd.Flags().StringVar(&installScope, "scope", "project", "Where to write: project or user")
+	installMCPCmd.Flags().BoolVar(&installPrint, "print", false, "Print what would be written instead of touching disk")
+	installMCPCmd.Flags().BoolVar(&installUninstall, "uninstall", false, "Remove what sonar wrote")
+	installMCPCmd.Flags().BoolVar(&installForce, "force", false, "Replace an entry sonar did not write")
 
 	installCmd.AddCommand(installMCPCmd)
 	rootCmd.AddCommand(installCmd)

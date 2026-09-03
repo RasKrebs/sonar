@@ -60,9 +60,24 @@ func TestInstallCommandIsRegistered(t *testing.T) {
 		if !hasMCP {
 			t.Error("install command has no mcp subcommand")
 		}
+		mcp, _, err := c.Find([]string{"mcp"})
+		if err != nil {
+			t.Fatalf("finding install mcp: %v", err)
+		}
 		for _, flag := range []string{"claude-code", "cursor", "codex", "generic", "scope", "print", "uninstall", "force"} {
-			if c.PersistentFlags().Lookup(flag) == nil {
-				t.Errorf("install is missing persistent flag --%s", flag)
+			if mcp.Flags().Lookup(flag) == nil {
+				t.Errorf("install mcp is missing flag --%s", flag)
+			}
+		}
+		// The MCP-only client flags must not leak to sibling subcommands,
+		// which would accept and then ignore them.
+		skills, _, err := c.Find([]string{"skills"})
+		if err != nil {
+			t.Fatalf("finding install skills: %v", err)
+		}
+		for _, flag := range []string{"cursor", "codex", "generic"} {
+			if skills.InheritedFlags().Lookup(flag) != nil {
+				t.Errorf("install skills inherits MCP-only flag --%s", flag)
 			}
 		}
 	}

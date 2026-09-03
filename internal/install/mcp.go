@@ -17,19 +17,6 @@ const serverKey = "sonar"
 // Cursor config formats.
 const serversKey = "mcpServers"
 
-// Action reports what InstallMCP did, so the CLI can print one honest line.
-type Action string
-
-const (
-	ActionCreated   Action = "created"
-	ActionUpdated   Action = "updated"
-	ActionUnchanged Action = "unchanged"
-	ActionRemoved   Action = "removed"
-	ActionAbsent    Action = "absent"
-	ActionPrinted   Action = "printed"
-	ActionRan       Action = "ran"
-)
-
 // Options describes one install run. GitRoot, Home, Binary, LookPath and Run
 // are injected so the whole package is testable without a real environment.
 type Options struct {
