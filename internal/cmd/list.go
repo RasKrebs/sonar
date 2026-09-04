@@ -24,6 +24,7 @@ var (
 	statsFlag      bool
 	ipv4Flag       bool
 	ipv6Flag       bool
+	tagFlag        string
 )
 
 var listCmd = &cobra.Command{
@@ -45,6 +46,7 @@ func init() {
 	listCmd.Flags().StringVar(&hostFlag, "host", "", "Scan a remote host via SSH (e.g. user@hostname)")
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
+	listCmd.Flags().StringVar(&tagFlag, "tag", "", "Show only ports attributed to this `sonar run` tag")
 	listCmd.MarkFlagsMutuallyExclusive("ipv4", "ipv6")
 	rootCmd.AddCommand(listCmd)
 }
@@ -93,6 +95,10 @@ func listRun(cmd *cobra.Command, args []string) error {
 		results = filterByIPVersion(results, "IPv4")
 	} else if ipv6Flag {
 		results = filterByIPVersion(results, "IPv6")
+	}
+
+	if tagFlag != "" {
+		results = filterByTag(results, tagFlag)
 	}
 
 	if jsonFlag {
@@ -187,6 +193,18 @@ func excludeApps(pp []ports.ListeningPort) []ports.ListeningPort {
 		}
 	}
 	return result
+}
+
+// filterByTag keeps only ports whose tag matches (also matching against the
+// run id, so callers can filter by either the human label or the stable id).
+func filterByTag(pp []ports.ListeningPort, tag string) []ports.ListeningPort {
+	var out []ports.ListeningPort
+	for _, p := range pp {
+		if p.Tag == tag || p.RunID == tag {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func filterByIPVersion(pp []ports.ListeningPort, ver string) []ports.ListeningPort {

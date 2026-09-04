@@ -40,6 +40,12 @@ type ListeningPort struct {
 	Type        PortType
 	IsApp       bool // true for desktop apps (Figma, Discord, etc.)
 
+	// Tagged-run attribution: set when this listener (or one of its ancestors)
+	// was spawned via `sonar run --tag`. Populated during Enrich by walking the
+	// PPID ancestry against the runs registry.
+	Tag   string // caller-supplied label
+	RunID string // caller-supplied (or generated) stable run id
+
 	// Process stats
 	CPUPercent  float64 // CPU usage percentage
 	MemoryRSS   int64   // resident set size in bytes

@@ -32,6 +32,11 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 	//    no exec), launchd label on macOS (one launchctl list call).
 	units := batchGetServiceUnits(pids)
 
+	// 4. Tagged-run attribution: load the runs registry once, then for each
+	//    listener walk its PPID ancestry (reusing the pidInfo map built above —
+	//    no extra exec) looking for an ancestor pid recorded by `sonar run`.
+	tagger := newRunTagger()
+
 	for i := range pp {
 		pid := pp[i].PID
 		if pid <= 0 {
@@ -47,6 +52,10 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 		}
 		if unit, ok := units[pid]; ok {
 			pp[i].ServiceUnit = unit
+		}
+		if tag, id, ok := tagger.lookup(pid, pidInfo); ok {
+			pp[i].Tag = tag
+			pp[i].RunID = id
 		}
 	}
 }

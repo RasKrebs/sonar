@@ -19,6 +19,10 @@ type JSONPort struct {
 	Type        string `json:"type"`
 	URL         string `json:"url"`
 
+	// Tagged-run attribution (set when spawned via `sonar run --tag`).
+	Tag   string `json:"tag,omitempty"`
+	RunID string `json:"run_id,omitempty"`
+
 	// Process stats
 	CPUPercent  float64 `json:"cpu_percent"`
 	MemoryRSS   int64   `json:"memory_rss_bytes"`
@@ -54,6 +58,8 @@ func RenderJSON(w io.Writer, pp []ports.ListeningPort) error {
 			IPVersion:            p.IPVersion,
 			Type:                 p.Type.String(),
 			URL:                  p.URL(),
+			Tag:                  p.Tag,
+			RunID:                p.RunID,
 			CPUPercent:           p.CPUPercent,
 			MemoryRSS:            p.MemoryRSS,
 			ThreadCount:          p.ThreadCount,

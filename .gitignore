@@ -8,3 +8,4 @@ sonar-tray
 dist/
 install-local.sh
 .claude
+*.dash
