@@ -1,7 +1,8 @@
 // Package state holds the daemon's published data model. These structs are the
 // JSON wire shape for `sonar list --json`, state.snapshot and state.delta.
-// Field names and JSON tags are the contract; see
-// docs/specs/2026-09-02-cross-spec-contract.md.
+// Field names and JSON tags are the contract: docs/schema/protocol.schema.json
+// is generated from them and clients in other repositories are built against
+// it, so renaming a field here is a breaking protocol change.
 package state
 
 import "fmt"
