@@ -16,9 +16,8 @@ import (
 )
 
 // The read half of the ports namespace. Every handler here answers from the
-// scanner's cached snapshot (scanner.Loop.Snapshot rescans only when the cache
-// is older than its 2 s TTL), so N clients reading at once cost the machine one
-// scan, not N.
+// scanner's shared snapshot rather than scanning for itself, so N clients
+// reading at once cost the machine one scan, not N. See readPorts.
 func init() {
 	RegisterHandler("ports.list", handlePortsList)
 	RegisterHandler("ports.inspect", handlePortsInspect)
@@ -30,13 +29,44 @@ func init() {
 }
 
 // readPorts serves the rows every read handler starts from.
+//
+// While subscribers are connected the scan loop is already running, so the
+// cached snapshot is never more than one scan interval old and a plain read is
+// answered from it. That is what keeps the scan counter flat: a `sonar list`
+// next to a running `sonar watch` costs nothing, and ten of them cost nothing
+// either. A read that asks for stats or health cannot use the cache unless a
+// subscriber is already collecting them, and a read with no loop behind it
+// scans for itself (reusing a scan younger than scanner.CacheTTL).
 func readPorts(rt *Runtime, include scanner.Include) ([]state.Port, error) {
+	if rt.Subscribers() > 0 {
+		if snap := rt.Scanner.Cached(); snap.Seq > 0 && cacheCovers(snap, include) {
+			return snap.Ports, nil
+		}
+	}
 	snap, err := rt.Scanner.Snapshot(include)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
 			"check `sonar daemon log` for the scanner error")
 	}
 	return snap.Ports, nil
+}
+
+// cacheCovers reports whether the cached snapshot already carries the
+// enrichments this read asked for. An empty port table trivially covers
+// everything: there is nothing to enrich.
+func cacheCovers(snap state.Snapshot, include scanner.Include) bool {
+	if !include.Stats && !include.Health {
+		return true
+	}
+	for i := range snap.Ports {
+		if include.Stats && snap.Ports[i].Stats == nil {
+			return false
+		}
+		if include.Health && snap.Ports[i].Health == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func handlePortsList(_ context.Context, req *Request) (any, error) {

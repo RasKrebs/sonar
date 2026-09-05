@@ -457,6 +457,43 @@ func TestPortsReadMethodsShareOneScan(t *testing.T) {
 	}
 }
 
+// TestReadsAreFreeWhileSomeoneIsSubscribed is the acceptance demo in miniature:
+// with a `watch` connected, the scan loop is already running and a burst of
+// `list` calls must not make it run any harder.
+func TestReadsAreFreeWhileSomeoneIsSubscribed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	h.setRows(fakeRows()...)
+
+	watcher := h.dial(ctx)
+	var snap map[string]any
+	if e := watcher.call("state.subscribe", rpc.StateSubscribeParams{}, &snap); e != nil {
+		t.Fatalf("state.subscribe: %v", e)
+	}
+
+	reader := h.dial(ctx)
+	var res listResult
+	if e := reader.call("ports.list", rpc.PortsListParams{}, &res); e != nil {
+		t.Fatalf("ports.list: %v", e)
+	}
+	before := h.loop.Status().Scans
+
+	// The loop keeps scanning on its own cadence; what must not happen is a
+	// read adding scans of its own. Give the reads no time to be "stale".
+	for range 20 {
+		if e := reader.call("ports.list", rpc.PortsListParams{}, &res); e != nil {
+			t.Fatalf("ports.list: %v", e)
+		}
+		if e := reader.call("ports.next", rpc.PortsNextParams{Start: 9100, End: 9200}, nil); e != nil {
+			t.Fatalf("ports.next: %v", e)
+		}
+	}
+	if got := h.loop.Status().Scans; got != before {
+		t.Fatalf("forty reads alongside a subscriber cost %d scans, want 0", got-before)
+	}
+}
+
 func TestDaemonStatusReportsTheScanCounter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
