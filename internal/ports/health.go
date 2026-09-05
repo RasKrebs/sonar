@@ -22,8 +22,9 @@ func ProbeHealth(host string, port int, path string, timeout time.Duration) Heal
 	if path == "" {
 		path = "/"
 	}
-	if host == "" || host == "0.0.0.0" || host == "[::]" {
-		host = "localhost"
+	host = HostForBind(host)
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
 	}
 	client := &http.Client{
 		Timeout: timeout,

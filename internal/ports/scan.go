@@ -55,13 +55,7 @@ func parseLsof(output string) []ListeningPort {
 
 		user := fields[2]
 
-		// Determine IP version from the TYPE field (IPv4/IPv6)
-		ipVersion := "IPv4"
-		if fields[4] == "IPv6" {
-			ipVersion = "IPv6"
-		}
-
-		// NAME field is like *:3000 or 127.0.0.1:3000
+		// NAME field is like *:3000, 127.0.0.1:3000 or [::1]:3000
 		name := fields[8]
 		idx := strings.LastIndex(name, ":")
 		if idx < 0 {
@@ -72,10 +66,9 @@ func parseLsof(output string) []ListeningPort {
 			continue
 		}
 
-		bindAddr := name[:idx]
-		if bindAddr == "*" {
-			bindAddr = "0.0.0.0"
-		}
+		// The TYPE field (IPv4/IPv6) is the address family lsof saw; it is the
+		// hint that resolves a bare "*" wildcard.
+		bindAddr, ipVersion := normalizeBind(name[:idx], fields[4] == "IPv6")
 
 		key := fmt.Sprintf("%d:%s", port, bindAddr)
 		if seen[key] {
@@ -147,14 +140,7 @@ func parseNetstat(output string) []ListeningPort {
 			continue
 		}
 
-		bindAddr := local[:idx]
-		ipVersion := "IPv4"
-		if proto == "TCPV6" || strings.Contains(bindAddr, "[") {
-			ipVersion = "IPv6"
-		}
-		if bindAddr == "0.0.0.0" || bindAddr == "[::]" {
-			bindAddr = "0.0.0.0"
-		}
+		bindAddr, ipVersion := normalizeBind(local[:idx], proto == "TCPV6")
 
 		key := fmt.Sprintf("%d:%s", port, bindAddr)
 		if seen[key] {
@@ -207,21 +193,15 @@ func parseSS(output string) []ListeningPort {
 			continue
 		}
 
-		bindAddr := local[:idx]
-		if bindAddr == "*" {
-			bindAddr = "0.0.0.0"
-		}
+		// ss has no address-family column: the address itself is the only
+		// hint, so a bare "*" is read as the IPv4 wildcard.
+		bindAddr, ipVersion := normalizeBind(local[:idx], false)
 
 		key := fmt.Sprintf("%d:%s", port, bindAddr)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-
-		ipVersion := "IPv4"
-		if strings.Contains(bindAddr, "[") {
-			ipVersion = "IPv6"
-		}
 
 		pid, process := parseSSUsers(line)
 
@@ -274,4 +254,25 @@ func parseSSUsers(line string) (pid int, process string) {
 	}
 
 	return pid, process
+}
+
+// normalizeBind turns a scanner's raw local address into the contract's
+// bind_address and the ip_version that agrees with it (contract §21). The
+// wildcard is "0.0.0.0" on IPv4 and "::" on IPv6 — never "0.0.0.0" paired with
+// "IPv6", which is what a dual-stack listener used to report. v6 is the address
+// family the scanner reported out of band (lsof's TYPE column, netstat's
+// proto); it only decides a bare "*", since every other form carries its family
+// in the address text.
+func normalizeBind(raw string, v6 bool) (bind, ipVersion string) {
+	addr := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(raw), "["), "]")
+	if addr == "" || addr == "*" {
+		if v6 {
+			return "::", "IPv6"
+		}
+		return "0.0.0.0", "IPv4"
+	}
+	if strings.Contains(addr, ":") {
+		return addr, "IPv6"
+	}
+	return addr, "IPv4"
 }
