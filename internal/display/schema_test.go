@@ -10,6 +10,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/ports"
 )
 
@@ -85,4 +86,57 @@ func compilePortSchema(t *testing.T) *jsonschema.Schema {
 		t.Fatal(err)
 	}
 	return sch
+}
+
+// TestRenderJSONCarriesResolvedGroups is the 1A.2 acceptance gate: with no
+// daemon, `sonar list --json` emits group, group_source and project_root from
+// the resolver, and the rows still satisfy the checked-in Port definition.
+func TestRenderJSONCarriesResolvedGroups(t *testing.T) {
+	repo := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(repo); err == nil {
+		repo = resolved
+	}
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := "name: fixture\nservices:\n  - name: api\n    port: 8000\n"
+	if err := os.WriteFile(filepath.Join(repo, ".sonar.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := []ports.ListeningPort{
+		{Port: 8000, BindAddress: "127.0.0.1", PID: 42, Process: "python3", Cwd: repo},
+		{Port: 3000, BindAddress: "127.0.0.1", PID: 43, Process: "node"},
+	}
+	groups.Attribute(rows)
+
+	if rows[0].Group != "fixture" || rows[0].GroupSource != "file" || rows[0].ProjectRoot != repo {
+		t.Fatalf("resolved row = {group: %q, source: %q, root: %q}",
+			rows[0].Group, rows[0].GroupSource, rows[0].ProjectRoot)
+	}
+	if rows[1].Group != "" {
+		t.Errorf("port with no cwd got group %q, want none", rows[1].Group)
+	}
+
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, rows); err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded[0]["group"] != "fixture" || decoded[0]["group_source"] != "file" {
+		t.Errorf("json row = %v", decoded[0])
+	}
+	if decoded[1]["group"] != nil || decoded[1]["group_source"] != nil {
+		t.Errorf("ungrouped json row = %v", decoded[1])
+	}
+
+	sch := compilePortSchema(t)
+	for i, row := range decoded {
+		if err := sch.Validate(any(row)); err != nil {
+			t.Errorf("row %d does not validate against #/definitions/Port:\n%v", i, err)
+		}
+	}
 }

@@ -13,7 +13,7 @@ import (
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // Available column names.
-var DefaultColumns = []string{"port", "process", "container", "image", "containerport", "url"}
+var DefaultColumns = []string{"port", "process", "group", "container", "image", "containerport", "url"}
 
 // AllColumns lists every supported column name.
 var AllColumns = []string{
@@ -22,7 +22,7 @@ var AllColumns = []string{
 	"container", "image", "containerport", "compose", "project",
 	"user", "bind", "ip",
 	"health", "latency",
-	"tag",
+	"group", "tag",
 }
 
 // TableOptions controls table rendering.
@@ -45,13 +45,6 @@ func RenderTable(w io.Writer, pp []ports.ListeningPort, opts TableOptions) {
 	cols := opts.Columns
 	if len(cols) == 0 {
 		cols = DefaultColumns
-		// Surface the TAG column automatically when at least one row carries a
-		// tag, but never bloat the default table when no `sonar run` is active.
-		if anyTagged(filtered) {
-			withTag := make([]string, len(cols), len(cols)+1)
-			copy(withTag, cols)
-			cols = append(withTag, "tag")
-		}
 	}
 
 	// Build header row
@@ -163,8 +156,8 @@ func columnLabel(col string) string {
 		return "HEALTH"
 	case "latency":
 		return "LATENCY"
-	case "tag":
-		return "TAG"
+	case "group", "tag":
+		return "GROUP"
 	default:
 		return col
 	}
@@ -226,24 +219,16 @@ func columnValue(p ports.ListeningPort, col string) string {
 			return fmt.Sprintf("%dms", p.HealthLatency.Milliseconds())
 		}
 		return ""
-	case "tag":
-		if p.Tag != "" {
-			return Cyan(p.Tag)
+	case "group", "tag":
+		// "tag" is kept as an alias of "group" for one release: the column was
+		// renamed when tagged runs became groups.
+		if p.Group != "" {
+			return Cyan(p.Group)
 		}
 		return ""
 	default:
 		return ""
 	}
-}
-
-// anyTagged reports whether any port carries a tagged-run label.
-func anyTagged(pp []ports.ListeningPort) bool {
-	for _, p := range pp {
-		if p.Tag != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func colorProcess(p ports.ListeningPort) string {

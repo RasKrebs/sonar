@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/raskrebs/sonar/internal/groups"
 )
 
 // Client is an MCP client sonar knows how to configure.
@@ -111,25 +113,14 @@ func ResolveTarget(client Client, scope Scope, gitRoot, home string) (Target, er
 }
 
 // FindGitRoot walks up from start looking for a .git entry. A linked worktree
-// has a .git file rather than a directory, so both count.
+// has a .git file rather than a directory, so both count. The walk itself lives
+// in internal/groups, which is also where the worktree naming rules are.
 func FindGitRoot(start string) (string, error) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", err
+	root, _, ok := groups.Find(start)
+	if !ok {
+		return "", fmt.Errorf("not inside a git repository: %s", start)
 	}
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = resolved
-	}
-	for {
-		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("not inside a git repository: %s", start)
-		}
-		dir = parent
-	}
+	return root, nil
 }
 
 // ResolveBinary returns the command string to write into client configs: the
