@@ -7,15 +7,21 @@ import (
 
 var trayCmd = &cobra.Command{
 	Use:   "tray",
-	Short: "Launch sonar in the system tray",
-	Long:  "Start a persistent system tray icon that shows active ports and allows quick access.",
+	Short: "Launch the Sonar desktop app",
+	Long: "Launch the Sonar desktop app, which lives in the menu bar or system tray\n" +
+		"and shows every port, group and health check live.\n\n" +
+		"If the app is not installed, sonar falls back to the older macOS menu bar\n" +
+		"binary (sonar-tray) when it is present, and otherwise prints where to\n" +
+		"download the app: " + tray.DownloadURL,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		detach, _ := cmd.Flags().GetBool("detach")
 		return tray.Run(detach)
 	},
 }
 
 func init() {
-	trayCmd.Flags().BoolP("detach", "d", false, "Run the tray app in the background")
+	trayCmd.Flags().BoolP("detach", "d", false, "Run the fallback menu bar binary in the background")
 	rootCmd.AddCommand(trayCmd)
 }
