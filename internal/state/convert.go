@@ -54,10 +54,12 @@ func FromListening(lp ports.ListeningPort) Port {
 		}
 	}
 	if lp.HealthStatus != "" {
+		status, reason := NormalizeHealth(lp.HealthStatus)
 		p.Health = &Health{
-			Status:    lp.HealthStatus,
+			Status:    status,
 			Code:      lp.HealthCode,
 			LatencyMs: lp.HealthLatency.Milliseconds(),
+			Reason:    reason,
 		}
 	}
 	if lp.DockerContainer != "" || lp.DockerImage != "" || lp.DockerComposeService != "" {

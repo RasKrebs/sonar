@@ -52,7 +52,12 @@ func ToListening(p Port) ports.ListeningPort {
 		lp.Connections = p.Stats.Connections
 	}
 	if p.Health != nil {
+		// The CLI's own renderers still speak the probe vocabulary, so the
+		// round trip hands back the reason when there is one.
 		lp.HealthStatus = p.Health.Status
+		if p.Health.Reason != "" {
+			lp.HealthStatus = p.Health.Reason
+		}
 		lp.HealthCode = p.Health.Code
 		lp.HealthLatency = time.Duration(p.Health.LatencyMs) * time.Millisecond
 	}

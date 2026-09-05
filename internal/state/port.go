@@ -47,10 +47,48 @@ type Stats struct {
 }
 
 // Health is the result of an HTTP probe. Null unless health was collected.
+//
+// Status is exactly one of the contract's three words. Reason carries the
+// scanner's finer-grained verdict ("refused", "timeout", "non-http", ...) for
+// a client that wants to say *why* a service is failing; it is advisory and
+// clients must branch on Status.
 type Health struct {
-	Status    string `json:"status"` // ok | fail | unknown
+	Status    string `json:"status" jsonschema:"enum=ok,enum=fail,enum=unknown"`
 	Code      int    `json:"code"`
 	LatencyMs int64  `json:"latency_ms"`
+	Reason    string `json:"reason,omitempty"`
+
+	// Configured marks a probe the daemon ran because a `.sonar.yaml` service
+	// declares a `health:` path. Such a row is state, not an opt-in statistic,
+	// so it survives the per-subscriber `include` filter. It never goes on the
+	// wire: a client sees the health object either way.
+	Configured bool `json:"-"`
+}
+
+// Health status values (contract §5, §13).
+const (
+	HealthOK      = "ok"
+	HealthFail    = "fail"
+	HealthUnknown = "unknown"
+)
+
+// NormalizeHealth maps the scanner's probe vocabulary
+// ("healthy", "unhealthy", "refused", "timeout", "non-http") onto the three
+// words the contract publishes, keeping the original as the reason. It is the
+// one place the translation happens, so every published row agrees.
+func NormalizeHealth(raw string) (status, reason string) {
+	switch raw {
+	case "":
+		return HealthUnknown, ""
+	case HealthOK, "healthy":
+		return HealthOK, raw
+	case HealthUnknown:
+		return HealthUnknown, ""
+	case HealthFail:
+		return HealthFail, ""
+	default:
+		return HealthFail, raw
+	}
 }
 
 // Docker describes the container behind a published port. Null for native

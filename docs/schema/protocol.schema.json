@@ -1213,13 +1213,21 @@
     "Health": {
       "properties": {
         "status": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "ok",
+            "fail",
+            "unknown"
+          ]
         },
         "code": {
           "type": "integer"
         },
         "latency_ms": {
           "type": "integer"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "type": "object",
@@ -1748,13 +1756,21 @@
           "type": "integer"
         },
         "status": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "ok",
+            "fail",
+            "unknown"
+          ]
         },
         "code": {
           "type": "integer"
         },
         "latency_ms": {
           "type": "integer"
+        },
+        "reason": {
+          "type": "string"
         }
       },
       "type": "object",

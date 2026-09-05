@@ -185,9 +185,12 @@ type PortsHealthResult struct {
 
 type PortHealth struct {
 	Port      int    `json:"port"`
-	Status    string `json:"status"`
+	Status    string `json:"status" jsonschema:"enum=ok,enum=fail,enum=unknown"`
 	Code      int    `json:"code"`
 	LatencyMs int64  `json:"latency_ms"`
+	// Reason is the probe's own verdict ("refused", "timeout", "non-http")
+	// behind a `fail`. Advisory: clients branch on Status.
+	Reason string `json:"reason,omitempty"`
 }
 
 type PortsLogsParams struct {

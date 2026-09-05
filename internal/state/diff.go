@@ -70,13 +70,27 @@ func diffPorts(prev, next []Port, withStats bool) Change[Port] {
 	return ch
 }
 
-// portsEqual compares two ports, optionally ignoring Stats.
+// portsEqual compares two ports, optionally ignoring Stats. Health latency is
+// always ignored: a probe that answers in 3 ms and then in 4 ms has not
+// changed, and with configured health probed on every tick a live latency in
+// the comparison would publish a delta every two seconds forever. The newest
+// latency still rides out with the next real change.
 func portsEqual(a, b Port, withStats bool) bool {
 	if !withStats {
 		a.Stats = nil
 		b.Stats = nil
 	}
+	a.Health = healthKey(a.Health)
+	b.Health = healthKey(b.Health)
 	return reflect.DeepEqual(a, b)
+}
+
+// healthKey is the part of a health result a change is measured on.
+func healthKey(h *Health) *Health {
+	if h == nil {
+		return nil
+	}
+	return &Health{Status: h.Status, Code: h.Code, Reason: h.Reason, Configured: h.Configured}
 }
 
 // diffKeyed is the generic collection diff used by every non-port collection.
