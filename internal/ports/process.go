@@ -43,13 +43,3 @@ func FindByPort(port int, bindIP string) (*ListeningPort, error) {
 	return nil, fmt.Errorf("port %d is bound to multiple addresses: %s\nUse --ip to specify which one (e.g. --ip %s)",
 		port, strings.Join(addrs, ", "), addrs[0])
 }
-
-// Kill sends a signal to the process listening on the given port.
-func Kill(port int, bindIP string, force bool) error {
-	lp, err := FindByPort(port, bindIP)
-	if err != nil {
-		return err
-	}
-
-	return KillPID(lp.PID, force)
-}
