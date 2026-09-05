@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAcquireLockRefusesASecondInstance(t *testing.T) {
@@ -86,5 +87,71 @@ func TestErrAlreadyRunningMessage(t *testing.T) {
 	}
 	if IsAlreadyRunning(os.ErrNotExist) {
 		t.Error("IsAlreadyRunning matched an unrelated error")
+	}
+}
+
+// TestWaitForLockReleaseBlocksUntilTheHolderLetsGo is the mechanism behind the
+// `daemon restart` fix: a daemon closes its socket before it releases its lock,
+// so the replacement has to wait for the lock.
+func TestWaitForLockReleaseBlocksUntilTheHolderLetsGo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.lock")
+	held, err := AcquireLock(path)
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+
+	const hold = 200 * time.Millisecond
+	go func() {
+		time.Sleep(hold)
+		_ = held.Release()
+	}()
+
+	start := time.Now()
+	if err := WaitForLockRelease(path, 10*time.Second); err != nil {
+		t.Fatalf("WaitForLockRelease: %v", err)
+	}
+	if waited := time.Since(start); waited < hold {
+		t.Errorf("WaitForLockRelease returned after %s, before the holder released at %s", waited, hold)
+	}
+
+	// The lock really is free: it can be taken now.
+	again, err := AcquireLock(path)
+	if err != nil {
+		t.Fatalf("the lock WaitForLockRelease called free is still held: %v", err)
+	}
+	again.Release()
+}
+
+// TestWaitForLockReleaseTimesOutWithAClearError: a lock nobody ever releases
+// must produce a bounded, named failure rather than a hang.
+func TestWaitForLockReleaseTimesOutWithAClearError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.lock")
+	held, err := AcquireLock(path)
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	defer held.Release()
+
+	err = WaitForLockRelease(path, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitForLockRelease returned nil while the lock was still held")
+	}
+	for _, want := range []string{path, "still holds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestWaitForLockReleaseIgnoresAStaleLockFile: a lock file left by a process
+// that is gone must not make a restart wait out the whole timeout.
+func TestWaitForLockReleaseIgnoresAStaleLockFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.lock")
+	// A pid nothing holds, and no lock on the file at all.
+	if err := os.WriteFile(path, []byte("2147483646\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WaitForLockRelease(path, time.Second); err != nil {
+		t.Fatalf("WaitForLockRelease on a stale lock file: %v", err)
 	}
 }

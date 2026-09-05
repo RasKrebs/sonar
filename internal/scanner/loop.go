@@ -20,8 +20,12 @@ import (
 const (
 	// BaseInterval is the interval while anything is changing.
 	BaseInterval = 2 * time.Second
-	// MaxInterval caps the backoff on unchanged scans.
+	// MaxInterval caps the backoff on unchanged scans while the daemon is
+	// serving RPC reads only.
 	MaxInterval = 10 * time.Second
+	// SubscribedMaxInterval caps the backoff while at least one subscriber is
+	// connected, so a live view never lags a change by more than this.
+	SubscribedMaxInterval = 5 * time.Second
 	// BackoffFactor multiplies the interval after an unchanged scan.
 	BackoffFactor = 1.5
 	// CacheTTL is how long an RPC read may reuse the last scan.
@@ -80,6 +84,7 @@ type Loop struct {
 	attr attribution
 
 	mu           sync.Mutex
+	subs         int
 	snap         state.Snapshot
 	haveSnap     bool
 	lastScanAt   time.Time
@@ -249,6 +254,9 @@ func (l *Loop) publish(prev, next state.Snapshot, events []state.Event) {
 // snapshot, the one it replaced, and whether anything a client cares about
 // changed.
 func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed bool, err error) {
+	// Read outside the mutex: Demand takes the server's own lock, which the
+	// server holds while calling back into the loop.
+	subs, _ := l.opts.Demand()
 	wantHealth := include.Health && l.healthDue()
 
 	pp, err := l.opts.Scan(include)
@@ -280,6 +288,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	l.subs = subs
 	prev = l.snap
 	if include.Health && !wantHealth {
 		// Between health cadences, carry the previous probe results forward so
@@ -310,7 +319,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		// Nothing to publish: keep the previous seq and back the interval off.
 		next.Seq = prev.Seq
 		l.snap = next
-		l.interval = backoff(l.interval)
+		l.interval = backoff(l.interval, l.maxIntervalLocked())
 		return next, prev, false, nil
 	}
 
@@ -329,11 +338,22 @@ func (l *Loop) healthDue() bool {
 	return l.lastHealthAt.IsZero() || l.now().Sub(l.lastHealthAt) >= HealthCadence
 }
 
-// backoff multiplies the interval by 1.5, capped at MaxInterval.
-func backoff(d time.Duration) time.Duration {
+// maxIntervalLocked is the ceiling the backoff may reach right now: 5 s while
+// anyone is subscribed, so a live view never lags a change by more than that,
+// and the full 10 s when the daemon only answers RPC reads. Caller holds the
+// mutex.
+func (l *Loop) maxIntervalLocked() time.Duration {
+	if l.subs > 0 {
+		return SubscribedMaxInterval
+	}
+	return MaxInterval
+}
+
+// backoff multiplies the interval by 1.5, capped at max.
+func backoff(d, max time.Duration) time.Duration {
 	next := time.Duration(float64(d) * BackoffFactor)
-	if next > MaxInterval {
-		return MaxInterval
+	if next > max {
+		return max
 	}
 	if next < BaseInterval {
 		return BaseInterval

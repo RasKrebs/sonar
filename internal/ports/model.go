@@ -2,6 +2,7 @@ package ports
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -100,13 +101,30 @@ func (lp *ListeningPort) PortKey() string {
 }
 
 // URL returns the HTTP URL for this port using its bind address.
-// For wildcard binds (0.0.0.0), localhost is used.
+// For wildcard binds (0.0.0.0 on IPv4, :: on IPv6), localhost is used; a
+// literal IPv6 address is bracketed so the URL parses.
 func (lp *ListeningPort) URL() string {
-	host := lp.BindAddress
-	if host == "" || host == "0.0.0.0" || host == "[::]" {
-		host = "localhost"
+	return PortURL(lp.BindAddress, lp.Port)
+}
+
+// PortURL builds the browsable URL for a bind address and port. It is shared
+// with the health prober so both agree on what a wildcard means.
+func PortURL(bind string, port int) string {
+	host := HostForBind(bind)
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
 	}
-	return fmt.Sprintf("http://%s:%d", host, lp.Port)
+	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+// HostForBind maps a bind address to the host a client should dial: a wildcard
+// becomes localhost, anything else is itself.
+func HostForBind(bind string) string {
+	switch bind {
+	case "", "0.0.0.0", "*", "::", "[::]":
+		return "localhost"
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(bind, "["), "]")
 }
 
 // FindAllByPort returns all listening entries matching the given port number.

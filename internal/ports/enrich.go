@@ -16,8 +16,14 @@ func Enrich(pp []ListeningPort) {
 	commands := batchGetCommands(pp)
 
 	for i := range pp {
-		if cmd, ok := commands[pp[i].PID]; ok {
-			pp[i].Command = cmd
+		if info, ok := commands[pp[i].PID]; ok {
+			pp[i].Command = info.command
+			// started_at is never gated by --stats: the contract publishes it
+			// on every row (contract §21). EnrichStats refines the same field
+			// with the raw ps lstart it parses anyway.
+			if pp[i].StartedAt == "" {
+				pp[i].StartedAt = info.startedAt
+			}
 		}
 		if pp[i].Type != PortTypeDocker {
 			pp[i].Type = ClassifyPort(pp[i].Port)
@@ -78,12 +84,20 @@ type DockerStatsEntry struct {
 	Uptime     string
 }
 
-// batchGetCommands fetches full command lines for all PIDs in a single ps call.
-func batchGetCommands(pp []ListeningPort) map[int]string {
-	result := make(map[int]string)
+// procInfo is what one always-on ps call reports per listening process: its
+// full command line and when it started. Both are unconditional — `started_at`
+// is not a stat (contract §21).
+type procInfo struct {
+	command   string
+	startedAt string // RFC3339, "" when ps did not report a parsable time
+}
+
+// batchGetCommands fetches full command lines and start times for all PIDs in a
+// single ps call.
+func batchGetCommands(pp []ListeningPort) map[int]procInfo {
 	pids := collectPIDs(pp)
 	if len(pids) == 0 {
-		return result
+		return map[int]procInfo{}
 	}
 
 	pidStrs := make([]string, len(pids))
@@ -95,32 +109,63 @@ func batchGetCommands(pp []ListeningPort) map[int]string {
 		return batchGetCommandsWindows(pidStrs)
 	}
 
-	out, err := exec.Command("ps", "-o", "pid=,command=", "-p", strings.Join(pidStrs, ",")).Output()
+	out, err := exec.Command("ps", "-o", "pid=,lstart=,command=", "-p", strings.Join(pidStrs, ",")).Output()
 	if err != nil {
-		return result
+		return map[int]procInfo{}
 	}
+	return parsePSCommands(string(out))
+}
 
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+// lstartFields is how many whitespace-separated tokens `ps -o lstart=` emits:
+// "Mon Jan  2 15:04:05 2006".
+const lstartFields = 5
+
+// parsePSCommands parses `ps -o pid=,lstart=,command=` output. The command is
+// everything after the fixed-width prefix, so it may contain any whitespace.
+func parsePSCommands(out string) map[int]procInfo {
+	result := make(map[int]procInfo)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, " ", 2)
-		if len(fields) < 2 {
+		fields := strings.Fields(line)
+		if len(fields) < lstartFields+2 {
 			continue
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue
 		}
-		result[pid] = strings.TrimSpace(fields[1])
+		lstart := strings.Join(fields[1:1+lstartFields], " ")
+		command := restAfterFields(line, 1+lstartFields)
+		if command == "" {
+			continue
+		}
+		result[pid] = procInfo{command: command, startedAt: parseStartTime(lstart)}
 	}
 	return result
 }
 
-// batchGetCommandsWindows fetches command lines via PowerShell Get-CimInstance on Windows.
-func batchGetCommandsWindows(pidStrs []string) map[int]string {
-	result := make(map[int]string)
+// restAfterFields returns line with its first n whitespace-separated fields
+// removed, preserving the remainder verbatim.
+func restAfterFields(line string, n int) string {
+	rest := line
+	for i := 0; i < n; i++ {
+		rest = strings.TrimLeft(rest, " \t")
+		idx := strings.IndexAny(rest, " \t")
+		if idx < 0 {
+			return ""
+		}
+		rest = rest[idx:]
+	}
+	return strings.TrimLeft(rest, " \t")
+}
+
+// batchGetCommandsWindows fetches command lines and start times via PowerShell
+// Get-CimInstance on Windows.
+func batchGetCommandsWindows(pidStrs []string) map[int]procInfo {
+	result := make(map[int]procInfo)
 
 	// Build WMI filter: "ProcessId=123 or ProcessId=456"
 	var conditions []string
@@ -130,7 +175,7 @@ func batchGetCommandsWindows(pidStrs []string) map[int]string {
 	filter := strings.Join(conditions, " or ")
 
 	psCmd := fmt.Sprintf(
-		"Get-CimInstance Win32_Process -Filter '%s' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation",
+		"Get-CimInstance Win32_Process -Filter '%s' | Select-Object ProcessId,@{N='StartedAt';E={$_.CreationDate.ToString('o')}},CommandLine | ConvertTo-Csv -NoTypeInformation",
 		filter,
 	)
 
@@ -145,21 +190,21 @@ func batchGetCommandsWindows(pidStrs []string) map[int]string {
 		return result
 	}
 
-	// CSV columns: "ProcessId","CommandLine"
+	// CSV columns: "ProcessId","StartedAt","CommandLine"
 	for i, record := range records {
 		if i == 0 {
 			continue // skip header
 		}
-		if len(record) < 2 {
+		if len(record) < 3 {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
 		if err != nil {
 			continue
 		}
-		cmd := strings.TrimSpace(record[1])
+		cmd := strings.TrimSpace(record[2])
 		if cmd != "" {
-			result[pid] = cmd
+			result[pid] = procInfo{command: cmd, startedAt: parseStartTime(record[1])}
 		}
 	}
 	return result

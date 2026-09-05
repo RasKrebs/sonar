@@ -2,6 +2,7 @@ package ports
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -195,6 +196,8 @@ func TestURL_UsesBindAddress(t *testing.T) {
 		{"0.0.0.0", "http://localhost:3000"},
 		{"", "http://localhost:3000"},
 		{"[::]", "http://localhost:3000"},
+		{"::", "http://localhost:3000"},
+		{"::1", "http://[::1]:3000"},
 		{"192.168.1.5", "http://192.168.1.5:3000"},
 		{"127.0.0.1", "http://127.0.0.1:3000"},
 	}
@@ -209,4 +212,93 @@ func TestURL_UsesBindAddress(t *testing.T) {
 
 func itoa(i int) string {
 	return fmt.Sprintf("%d", i)
+}
+
+// TestNormalizeBind pins contract §21: bind_address and ip_version always
+// agree. A dual-stack listener used to report "0.0.0.0" with "IPv6".
+func TestNormalizeBind(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		v6      bool
+		bind    string
+		version string
+	}{
+		{"lsof v4 wildcard", "*", false, "0.0.0.0", "IPv4"},
+		{"lsof v6 wildcard", "*", true, "::", "IPv6"},
+		{"netstat v6 wildcard", "[::]", true, "::", "IPv6"},
+		{"ss v6 wildcard", "[::]", false, "::", "IPv6"},
+		{"bare v6 wildcard", "::", false, "::", "IPv6"},
+		{"v4 wildcard spelled out", "0.0.0.0", false, "0.0.0.0", "IPv4"},
+		{"v4 loopback", "127.0.0.1", false, "127.0.0.1", "IPv4"},
+		{"v6 loopback", "[::1]", false, "::1", "IPv6"},
+		{"v6 literal", "[fe80::1]", true, "fe80::1", "IPv6"},
+		{"lan address", "192.168.1.5", false, "192.168.1.5", "IPv4"},
+		{"empty is the v4 wildcard", "", false, "0.0.0.0", "IPv4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bind, version := normalizeBind(tt.raw, tt.v6)
+			if bind != tt.bind || version != tt.version {
+				t.Errorf("normalizeBind(%q, %v) = (%q, %q), want (%q, %q)",
+					tt.raw, tt.v6, bind, version, tt.bind, tt.version)
+			}
+			wantV6 := version == "IPv6"
+			if gotV6 := strings.Contains(bind, ":"); gotV6 != wantV6 {
+				t.Errorf("bind %q and ip_version %q disagree", bind, version)
+			}
+		})
+	}
+}
+
+// TestParseLsof_DualStackWildcard is the smoke-test regression: a process
+// listening on both families yields one row per family, each self-consistent.
+func TestParseLsof_DualStackWildcard(t *testing.T) {
+	output := `COMMAND   PID  USER   FD   TYPE   DEVICE SIZE/OFF NODE NAME
+node    1234 user    6u  IPv4  1234567      0t0  TCP *:3000 (LISTEN)
+node    1234 user    7u  IPv6  1234568      0t0  TCP *:3000 (LISTEN)
+node    1234 user    8u  IPv6  1234569      0t0  TCP [::1]:4000 (LISTEN)
+`
+	results := parseLsof(output)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %+v", len(results), results)
+	}
+	want := map[string]string{
+		"0.0.0.0": "IPv4",
+		"::":      "IPv6",
+		"::1":     "IPv6",
+	}
+	for _, r := range results {
+		version, ok := want[r.BindAddress]
+		if !ok {
+			t.Errorf("unexpected bind address %q", r.BindAddress)
+			continue
+		}
+		if r.IPVersion != version {
+			t.Errorf("bind %q reported ip_version %q, want %q", r.BindAddress, r.IPVersion, version)
+		}
+	}
+}
+
+// TestParseNetstat_DualStackWildcard covers the same thing on Windows, where
+// the v6 wildcard used to be folded onto the v4 row.
+func TestParseNetstat_DualStackWildcard(t *testing.T) {
+	output := `  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:8000           0.0.0.0:0              LISTENING       1001
+  TCP    [::]:8000              [::]:0                 LISTENING       1001
+`
+	results := parseNetstat(output)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 entries (one per family), got %d: %+v", len(results), results)
+	}
+	byBind := map[string]string{}
+	for _, r := range results {
+		byBind[r.BindAddress] = r.IPVersion
+	}
+	if byBind["0.0.0.0"] != "IPv4" {
+		t.Errorf("0.0.0.0 reported %q, want IPv4", byBind["0.0.0.0"])
+	}
+	if byBind["::"] != "IPv6" {
+		t.Errorf(":: reported %q, want IPv6", byBind["::"])
+	}
 }

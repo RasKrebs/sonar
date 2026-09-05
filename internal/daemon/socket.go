@@ -42,6 +42,36 @@ func socketPathFrom(getenv func(string) string, home func() (string, error), goo
 	return filepath.Join(configDirFrom(getenv, home), "daemon.sock")
 }
 
+// defaultSocketPath is where the daemon would listen with SONAR_SOCKET unset:
+// the directory sonar creates and owns.
+func defaultSocketPath() string {
+	return socketPathFrom(withoutSocketEnv(os.Getenv), os.UserHomeDir, runtime.GOOS)
+}
+
+// OwnsSocketDir reports whether the directory holding path is one sonar makes
+// for itself, rather than a directory the user pointed SONAR_SOCKET at.
+// Only a directory we own may be tightened to 0700: `SONAR_SOCKET=/tmp/x.sock`
+// must not chmod /tmp (contract §21).
+func OwnsSocketDir(path string) bool {
+	return ownsSocketDir(path, os.Getenv, os.UserHomeDir, runtime.GOOS)
+}
+
+func ownsSocketDir(path string, getenv func(string) string, home func() (string, error), goos string) bool {
+	def := socketPathFrom(withoutSocketEnv(getenv), home, goos)
+	return filepath.Clean(filepath.Dir(path)) == filepath.Clean(filepath.Dir(def))
+}
+
+// withoutSocketEnv hides SONAR_SOCKET from a getenv, so the default location
+// can be resolved even when the user overrode it.
+func withoutSocketEnv(getenv func(string) string) func(string) string {
+	return func(k string) string {
+		if k == "SONAR_SOCKET" {
+			return ""
+		}
+		return getenv(k)
+	}
+}
+
 // ConfigDir is ~/.config/sonar: the home of the log file, the lock file when
 // the socket lives on a tmpfs, and (from step 1A.4) the database.
 func ConfigDir() string { return configDirFrom(os.Getenv, os.UserHomeDir) }

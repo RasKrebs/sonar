@@ -165,7 +165,9 @@ func daemonStopRun(cmd *cobra.Command, _ []string) error {
 	if err := c.Call(cmd.Context(), "daemon.shutdown", rpc.Empty{}, &ok); err != nil {
 		return err
 	}
-	waitForSocketGone(socket, 5*time.Second)
+	if err := waitForDaemonGone(socket, stopTimeout); err != nil {
+		return err
+	}
 	fmt.Println("sonar daemon stopped")
 	return nil
 }
@@ -176,7 +178,11 @@ func daemonRestartRun(cmd *cobra.Command, _ []string) error {
 		var ok rpc.OKResult
 		_ = c.Call(cmd.Context(), "daemon.shutdown", rpc.Empty{}, &ok)
 		c.Close()
-		waitForSocketGone(socket, 5*time.Second)
+		// The old daemon releases its lock after it closes its socket, so the
+		// replacement must wait for the lock, not for the socket.
+		if err := waitForDaemonGone(socket, stopTimeout); err != nil {
+			return err
+		}
 	}
 	return detachDaemon(cmd.Context(), socket)
 }
