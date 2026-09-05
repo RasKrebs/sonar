@@ -188,6 +188,15 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		"id", h.ID, "pid", h.PID, "group", h.Group, "name", h.Name, "log", h.LogPath)
 	req.Runtime.Scanner.Wake()
 
+	// Reap it: an unwaited child stays a zombie, and a zombie pid still looks
+	// alive to every liveness test, so the run would never be pruned.
+	go func(rt *daemon.Runtime, h *spawn.Handle) {
+		code, err := h.Wait()
+		Default.Unregister(h.PID)
+		rt.Logger.Info("run exited", "id", h.ID, "pid", h.PID, "code", code, "error", err)
+		rt.Scanner.Wake()
+	}(req.Runtime, h)
+
 	return rpc.RunsSpawnResult{
 		// A run has no ports yet at the moment it starts, so `affected` is
 		// empty; the ports arrive in the next state.delta.
