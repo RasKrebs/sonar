@@ -27,7 +27,7 @@ const idleCheckInterval = 5 * time.Second
 // Capabilities lists the method families this build serves. Clients read it
 // from daemon.hello to tell whether, say, expose.* exists before calling it.
 // Later steps append their own family as they land.
-func Capabilities() []string { return []string{"state", "ports.read", "ports.kill"} }
+func Capabilities() []string { return []string{"state", "ports.read", "ports.kill", "store"} }
 
 // Options configures a Server.
 type Options struct {
@@ -49,6 +49,9 @@ type Options struct {
 	// Scanner overrides the scan loop. Tests inject one; production leaves it
 	// nil and gets the OS scanner.
 	Scanner *scanner.Loop
+	// DBPath is the SQLite database to open. Empty means store.Path(); tests
+	// point it at a temp directory.
+	DBPath string
 }
 
 // Server is the daemon: a listener, a set of connections, the subscription
@@ -70,6 +73,9 @@ type Server struct {
 
 	subsMu sync.RWMutex
 	conns  map[uint64]*Conn
+
+	pendingMu sync.Mutex
+	pending   []state.Event
 
 	stopOnce sync.Once
 	stopping chan struct{}
@@ -123,6 +129,7 @@ func New(opts Options) *Server {
 		Scanner:    s.loop,
 		srv:        s,
 	}
+	s.loop.SetRuns(s.runtime.RunRegistry)
 	return s
 }
 
@@ -167,6 +174,11 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// The store comes up before the scanner so the first tick already resolves
+	// groups with the stored pins and publishes the stored names.
+	s.openStore()
+	defer s.closeStore()
 
 	s.wg.Add(1)
 	go func() {
@@ -390,6 +402,12 @@ func (s *Server) publish(prev, next state.Snapshot, events []state.Event) {
 	s.subsMu.RLock()
 	defer s.subsMu.RUnlock()
 
+	// Events raised before anyone was listening ride out with the first delta
+	// that has somewhere to go.
+	if s.listeningForEvents() {
+		events = append(s.takePending(), events...)
+	}
+
 	deltaCache := map[scanner.Include][]byte{}
 	eventCache := map[scanner.Include][][]byte{}
 
@@ -417,6 +435,17 @@ func (s *Server) publish(prev, next state.Snapshot, events []state.Event) {
 			c.enqueue(m)
 		}
 	}
+}
+
+// listeningForEvents reports whether any subscriber asked for events. Caller
+// holds subsMu.
+func (s *Server) listeningForEvents() bool {
+	for _, c := range s.conns {
+		if c.subscribed && c.events {
+			return true
+		}
+	}
+	return false
 }
 
 // broadcastEvent sends one event to every subscriber that asked for events.

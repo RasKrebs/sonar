@@ -141,6 +141,9 @@ func daemonStatusRun(cmd *cobra.Command, _ []string) error {
 		fmt.Printf("last scan     %s\n", status.LastScanAt)
 	}
 	fmt.Printf("socket        %s\n", hello.Socket)
+	if status.DBPath != "" {
+		fmt.Printf("database      %s\n", status.DBPath)
+	}
 	fmt.Printf("capabilities  %v\n", hello.Capabilities)
 	return nil
 }

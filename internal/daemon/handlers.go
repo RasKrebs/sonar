@@ -84,9 +84,7 @@ func handleStatus(_ context.Context, req *Request) (any, error) {
 		Subscribers:    rt.Subscribers(),
 		LastScanAt:     lastScan,
 		ScanIntervalMs: st.IntervalMs,
-		// The SQLite store lands in step 1A.4; until then there is no database
-		// and the field is empty rather than a path that does not exist.
-		DBPath: "",
+		DBPath:         rt.DBPath(),
 	}, nil
 }
 
