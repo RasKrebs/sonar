@@ -9,6 +9,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/notify"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ var watchCmd = &cobra.Command{
 
 		if watchStatsFlag {
 			// Live stats mode: render full table, then update in-place
-			fmt.Print("\033[?25l") // hide cursor
+			fmt.Print("\033[?25l")         // hide cursor
 			defer fmt.Print("\033[?25h\n") // show cursor on exit
 			renderLiveTable(current, statsColumns)
 		} else {
@@ -100,6 +101,8 @@ func scanAndEnrich(withStats bool) ([]ports.ListeningPort, error) {
 	if withStats {
 		ports.EnrichStats(results, docker.AllContainerStatsAsEntries())
 	}
+	// Fill in the GROUP column the table shows by default.
+	groups.Attribute(results)
 	return results, nil
 }
 

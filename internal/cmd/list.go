@@ -8,7 +8,9 @@ import (
 
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +26,9 @@ var (
 	statsFlag      bool
 	ipv4Flag       bool
 	ipv6Flag       bool
+	groupFlag      string
 	tagFlag        string
+	treeFlag       bool
 )
 
 var listCmd = &cobra.Command{
@@ -46,13 +50,16 @@ func init() {
 	listCmd.Flags().StringVar(&hostFlag, "host", "", "Scan a remote host via SSH (e.g. user@hostname)")
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
-	listCmd.Flags().StringVar(&tagFlag, "tag", "", "Show only ports attributed to this `sonar run` tag")
+	listCmd.Flags().StringVar(&groupFlag, "group", "", "Show only ports in this `group`")
+	listCmd.Flags().StringVar(&tagFlag, "tag", "", "Alias of --group, kept for one release")
+	listCmd.Flags().BoolVar(&treeFlag, "tree", false, "Group the ports into a tree instead of a table")
 	listCmd.MarkFlagsMutuallyExclusive("ipv4", "ipv6")
 	rootCmd.AddCommand(listCmd)
 }
 
 func listRun(cmd *cobra.Command, args []string) error {
 	var results []ports.ListeningPort
+	var index *groups.Index
 	var err error
 
 	if hostFlag != "" {
@@ -77,6 +84,9 @@ func listRun(cmd *cobra.Command, args []string) error {
 		if healthFlag {
 			ports.EnrichHealth(results, 2*time.Second)
 		}
+		// Resolve every port's group: pin > run > .sonar.yaml > Compose >
+		// git root. This is the no-daemon path, so it happens per command.
+		_, index = groups.Attribute(results)
 	}
 
 	// Resolve row-affecting settings (config fills in where no flag was passed).
@@ -97,12 +107,20 @@ func listRun(cmd *cobra.Command, args []string) error {
 		results = filterByIPVersion(results, "IPv6")
 	}
 
-	if tagFlag != "" {
-		results = filterByTag(results, tagFlag)
+	if group := groupFlag; group != "" || tagFlag != "" {
+		if group == "" {
+			group = tagFlag
+		}
+		results = filterByGroup(results, group)
 	}
 
 	if jsonFlag {
 		return display.RenderJSON(os.Stdout, results)
+	}
+
+	if treeFlag {
+		display.RenderTree(os.Stdout, results, groups.Groups(state.FromListeningAll(results), index))
+		return nil
 	}
 
 	sortBy := effectiveString(cmd.Flags().Changed("sort"), sortFlag, cfg.List.Sort)
@@ -195,12 +213,12 @@ func excludeApps(pp []ports.ListeningPort) []ports.ListeningPort {
 	return result
 }
 
-// filterByTag keeps only ports whose tag matches (also matching against the
-// run id, so callers can filter by either the human label or the stable id).
-func filterByTag(pp []ports.ListeningPort, tag string) []ports.ListeningPort {
+// filterByGroup keeps only ports in one group. A `sonar run` tag and a run id
+// still match, so the old --tag spelling keeps working while it is an alias.
+func filterByGroup(pp []ports.ListeningPort, group string) []ports.ListeningPort {
 	var out []ports.ListeningPort
 	for _, p := range pp {
-		if p.Tag == tag || p.RunID == tag {
+		if p.Group == group || p.Tag == group || p.RunID == group {
 			out = append(out, p)
 		}
 	}

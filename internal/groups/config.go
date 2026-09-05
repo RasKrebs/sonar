@@ -245,7 +245,7 @@ func rejectExpose(doc *yaml.Node) error {
 		}
 		for _, item := range list.Content {
 			if item.Kind == yaml.MappingNode && hasKey(item, "expose") {
-				return exposeError(serviceName(item))
+				return exposeError(mappingName(item))
 			}
 		}
 	}
@@ -270,7 +270,7 @@ func hasKey(mapping *yaml.Node, key string) bool {
 	return false
 }
 
-func serviceName(mapping *yaml.Node) string {
+func mappingName(mapping *yaml.Node) string {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value == "name" {
 			return mapping.Content[i+1].Value
