@@ -293,3 +293,29 @@ func TestPatchServicesChecksTheNameEvenForAnEmptyPatch(t *testing.T) {
 		t.Fatalf("expected a ServiceNotFoundError, got %v", err)
 	}
 }
+
+// TestPatchServicesCollapsesTrailingCommentPadding pins a documented
+// limitation rather than a promise: yaml.v3 stores a trailing comment's text on
+// the node but not its column, and its emitter always writes exactly one space
+// in front of it, so `cmd: x     # note` comes back as `cmd: x # note`. The
+// comment is never lost, only its alignment. If a future yaml.v3 learns to
+// preserve the padding this test is what will notice, and the note in the
+// `groups.config.set` handler and the README can go.
+func TestPatchServicesCollapsesTrailingCommentPadding(t *testing.T) {
+	path := writePatchable(t, commented)
+
+	if _, err := PatchServices(path, []ServiceEdit{{
+		Name:  "db",
+		Patch: ServicePatch{}.SetString(FieldColor, "blue"),
+	}}); err != nil {
+		t.Fatalf("PatchServices: %v", err)
+	}
+
+	out := read(t, path)
+	if !strings.Contains(out, "cmd: uv run api # served by uvicorn") {
+		t.Errorf("the trailing comment did not survive with a single space:\n%s", out)
+	}
+	if strings.Contains(out, "cmd: uv run api          # served by uvicorn") {
+		t.Errorf("yaml.v3 now preserves the padding; drop the documented caveat:\n%s", out)
+	}
+}

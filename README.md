@@ -235,7 +235,11 @@ ports: [9229]        # ports that belong to this project without a service
 
 `.sonar.yml` is read if that is how you spell it; `sonar init` always writes
 `.sonar.yaml`. The daemon watches the projects it knows about and picks up
-edits to the file without a restart.
+edits to the file without a restart. When the desktop app edits a service the
+file is re-rendered from its own syntax tree, so comments, key order and layout
+survive — except that extra spaces lining a trailing comment up (`cmd: x     #
+note`) collapse to one, because the YAML library keeps the comment but not its
+column.
 
 ### `sonar up`
 

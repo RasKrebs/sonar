@@ -57,6 +57,13 @@ func handleGroupsConfigSet(_ context.Context, req *Request) (any, error) {
 		return nil, err
 	}
 
+	// The file is re-rendered from its own node tree, so comments, key order
+	// and formatting survive an edit — with one exception: yaml.v3 keeps the
+	// text of a trailing comment but not the padding in front of it, so
+	// `cmd: x     # note` comes back as `cmd: x # note`. Node carries no column
+	// for a LineComment and the emitter always writes exactly one space, so
+	// preserving it would mean re-rendering the file by hand; the comment
+	// itself is never lost, and that is where this stops.
 	cfg, err := groups.PatchServices(path, p.Services)
 	if err != nil {
 		return nil, configError(path, err)
