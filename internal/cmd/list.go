@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/groups"
@@ -58,60 +60,29 @@ func init() {
 }
 
 func listRun(cmd *cobra.Command, args []string) error {
-	var results []ports.ListeningPort
-	var index *groups.Index
-	var err error
-
-	if hostFlag != "" {
-		results, err = ports.ScanRemote(hostFlag)
-		if err != nil {
-			return err
-		}
-		// Classify port types only; Docker and process stats are not available over SSH
-		for i := range results {
-			results[i].Type = ports.ClassifyPort(results[i].Port)
-		}
-	} else {
-		results, err = ports.Scan()
-		if err != nil {
-			return err
-		}
-		docker.EnrichPorts(results)
-		ports.Enrich(results)
-		if statsFlag {
-			ports.EnrichStats(results, docker.AllContainerStatsAsEntries())
-		}
-		if healthFlag {
-			ports.EnrichHealth(results, 2*time.Second)
-		}
-		// Resolve every port's group: pin > run > .sonar.yaml > Compose >
-		// git root. This is the no-daemon path, so it happens per command.
-		_, index = groups.Attribute(results)
-	}
-
 	// Resolve row-affecting settings (config fills in where no flag was passed).
 	cfg := loadedConfig
 	showApps := effectiveBool(cmd.Flags().Changed("all"), allFlag, cfg.List.All)
 	activeFilter := effectiveString(cmd.Flags().Changed("filter"), filterFlag, cfg.List.Filter)
-
-	if !showApps {
-		results = excludeApps(results)
+	group := groupFlag
+	if group == "" {
+		group = tagFlag
 	}
-	if activeFilter != "" {
-		results = display.FilterPorts(results, activeFilter)
-	}
-
+	ipVersion := ""
 	if ipv4Flag {
-		results = filterByIPVersion(results, "IPv4")
+		ipVersion = "IPv4"
 	} else if ipv6Flag {
-		results = filterByIPVersion(results, "IPv6")
+		ipVersion = "IPv6"
 	}
 
-	if group := groupFlag; group != "" || tagFlag != "" {
-		if group == "" {
-			group = tagFlag
-		}
-		results = filterByGroup(results, group)
+	results, index, err := listPorts(cmd.Context(), listQuery{
+		showApps:  showApps,
+		filter:    activeFilter,
+		group:     group,
+		ipVersion: ipVersion,
+	})
+	if err != nil {
+		return err
 	}
 
 	if jsonFlag {
@@ -119,6 +90,9 @@ func listRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if treeFlag {
+		if index == nil {
+			index = observeConfigs(results)
+		}
 		display.RenderTree(os.Stdout, results, groups.Groups(state.FromListeningAll(results), index))
 		return nil
 	}
@@ -247,4 +221,99 @@ func ValidateColumns(cols []string) error {
 		}
 	}
 	return nil
+}
+
+// listQuery is what `sonar list` asks for, already resolved from flags and
+// config, so the daemon and the direct path filter by the same values.
+type listQuery struct {
+	showApps  bool
+	filter    string
+	group     string
+	ipVersion string
+}
+
+// listPorts returns the rows to render. It reads through the daemon when one is
+// reachable (autostarting it, contract §7) and falls back to a direct scan with
+// a one-line note otherwise. The group index is only built on the direct path;
+// through the daemon the tree view derives what it needs from the rows.
+func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups.Index, error) {
+	if hostFlag != "" {
+		// A remote host is scanned over SSH; the local daemon knows nothing
+		// about it.
+		results, err := ports.ScanRemote(hostFlag)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range results {
+			results[i].Type = ports.ClassifyPort(results[i].Port)
+		}
+		return applyListFilters(results, q), nil, nil
+	}
+
+	if c := daemonClient(ctx); c != nil {
+		defer c.Close()
+		rows, err := daemonList(ctx, c, rpc.PortsListParams{
+			Group:     strPtrOrNil(q.group),
+			Filter:    strPtrOrNil(q.filter),
+			All:       q.showApps,
+			IPVersion: strPtrOrNil(q.ipVersion),
+			Include:   listInclude(statsFlag, healthFlag),
+		})
+		if err == nil {
+			return rows, nil, nil
+		}
+		// A daemon that answered with an error is a real failure, not a
+		// reason to scan twice.
+		return nil, nil, err
+	}
+
+	results, err := ports.Scan()
+	if err != nil {
+		return nil, nil, err
+	}
+	docker.EnrichPorts(results)
+	ports.Enrich(results)
+	if statsFlag {
+		ports.EnrichStats(results, docker.AllContainerStatsAsEntries())
+	}
+	if healthFlag {
+		ports.EnrichHealth(results, 2*time.Second)
+	}
+	// Resolve every port's group: pin > run > .sonar.yaml > Compose > git root.
+	// This is the no-daemon path, so it happens per command.
+	_, index := groups.Attribute(results)
+	return applyListFilters(results, q), index, nil
+}
+
+// applyListFilters is the direct path's copy of what the daemon does to
+// ports.list params. The two must agree: spec integration test 6 compares them.
+func applyListFilters(results []ports.ListeningPort, q listQuery) []ports.ListeningPort {
+	if !q.showApps {
+		results = excludeApps(results)
+	}
+	if q.filter != "" {
+		results = display.FilterPorts(results, q.filter)
+	}
+	if q.ipVersion != "" {
+		results = filterByIPVersion(results, q.ipVersion)
+	}
+	if q.group != "" {
+		results = filterByGroup(results, q.group)
+	}
+	return results
+}
+
+// observeConfigs builds the group index the tree view needs from rows the
+// daemon resolved. It only looks for `.sonar.yaml` files — the group each port
+// belongs to already came off the wire — so the tree shows the same service
+// names and roots either way.
+func observeConfigs(rows []ports.ListeningPort) *groups.Index {
+	index := groups.NewIndex()
+	if wd, err := os.Getwd(); err == nil {
+		index.Observe(wd)
+	}
+	for i := range rows {
+		index.Observe(rows[i].Cwd)
+	}
+	return index
 }

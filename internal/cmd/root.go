@@ -32,6 +32,8 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().Bool("no-color", false, "Disable colored output")
+	rootCmd.PersistentFlags().BoolVar(&noDaemonFlag, "no-daemon", false,
+		"Never talk to the sonar daemon; scan directly instead")
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		cfg, warnings := config.Load()
 		for _, w := range warnings {

@@ -1,17 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/raskrebs/sonar/internal/daemon/client"
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/notify"
 	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +33,13 @@ var watchCmd = &cobra.Command{
 		watchHost, _ := cmd.Flags().GetString("host")
 
 		statsColumns := append(display.DefaultColumns, "cpu", "mem", "state", "uptime", "connections")
+
+		if watchHost == "" {
+			if c := daemonClient(cmd.Context()); c != nil {
+				defer c.Close()
+				return watchThroughDaemon(cmd.Context(), c, showAll, statsColumns)
+			}
+		}
 
 		// Initial scan
 		current, err := scanAndEnrichWithHost(watchHost, watchStatsFlag)
@@ -89,6 +100,87 @@ func init() {
 	watchCmd.Flags().Bool("stats", false, "Show live resource stats (CPU, memory, state)")
 	watchCmd.Flags().String("host", "", "Watch a remote host via SSH (e.g. user@hostname)")
 	rootCmd.AddCommand(watchCmd)
+}
+
+// watchThroughDaemon subscribes instead of polling: the daemon runs one scan
+// for every watcher on the machine, so a second `sonar watch` costs nothing.
+// What it prints is what the polling loop prints.
+func watchThroughDaemon(ctx context.Context, c *client.Client, showAll bool, statsColumns []string) error {
+	sub, err := c.Subscribe(ctx, client.SubscribeOptions{Stats: watchStatsFlag})
+	if err != nil {
+		return cliError(err)
+	}
+	defer sub.Unsubscribe(context.WithoutCancel(ctx))
+
+	live := map[string]state.Port{}
+	for _, p := range sub.Snapshot.Ports {
+		live[p.Key()] = p
+	}
+	current := watchRows(live, showAll)
+
+	if watchStatsFlag {
+		fmt.Print("\033[?25l")         // hide cursor
+		defer fmt.Print("\033[?25h\n") // show cursor on exit
+		renderLiveTable(current, statsColumns)
+	} else {
+		display.RenderTable(os.Stdout, current, display.TableOptions{})
+		fmt.Println()
+		fmt.Println(display.Dim("Watching for changes... (Ctrl+C to stop)"))
+		fmt.Println()
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	for {
+		select {
+		case <-sigCh:
+			return nil
+		case <-c.Done():
+			return nil
+		case delta, ok := <-sub.Deltas:
+			if !ok {
+				return nil
+			}
+			for _, key := range delta.Ports.Removed {
+				delete(live, key)
+			}
+			for _, p := range delta.Ports.Added {
+				live[p.Key()] = p
+			}
+			for _, p := range delta.Ports.Updated {
+				live[p.Key()] = p
+			}
+			next := watchRows(live, showAll)
+			if watchStatsFlag {
+				renderLiveTable(next, statsColumns)
+			} else {
+				printDiff(current, next)
+			}
+			current = next
+		}
+	}
+}
+
+// watchRows turns the live map back into the rows the renderers take, in a
+// stable order so the diff lines do not shuffle between ticks.
+func watchRows(live map[string]state.Port, showAll bool) []ports.ListeningPort {
+	rows := make([]state.Port, 0, len(live))
+	for _, p := range live {
+		rows = append(rows, p)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Port != rows[j].Port {
+			return rows[i].Port < rows[j].Port
+		}
+		return rows[i].BindAddress < rows[j].BindAddress
+	})
+	out := state.ToListeningAll(rows)
+	if !showAll {
+		out = excludeApps(out)
+	}
+	return out
 }
 
 func scanAndEnrich(withStats bool) ([]ports.ListeningPort, error) {

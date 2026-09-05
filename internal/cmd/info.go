@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -52,17 +55,10 @@ var infoCmd = &cobra.Command{
 			}
 			lp.Type = ports.ClassifyPort(lp.Port)
 		} else {
-			lp, err = ports.FindByPort(port, bindIP)
+			lp, err = inspectPort(cmd.Context(), port, bindIP)
 			if err != nil {
 				return err
 			}
-			// Enrich
-			enriched := []ports.ListeningPort{*lp}
-			docker.EnrichPorts(enriched)
-			ports.Enrich(enriched)
-			ports.EnrichStats(enriched, docker.AllContainerStatsAsEntries())
-			ports.EnrichHealth(enriched, 2*time.Second)
-			*lp = enriched[0]
 		}
 
 		printField("Port", display.BoldCyan(fmt.Sprintf("%d", lp.Port)))
@@ -133,6 +129,36 @@ var infoCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// inspectPort resolves one port's detail view. The daemon answers from the
+// shared scan and probes only this port's health, which is what the direct path
+// below does too.
+func inspectPort(ctx context.Context, port int, bindIP string) (*ports.ListeningPort, error) {
+	if c := daemonClient(ctx); c != nil {
+		defer c.Close()
+		var res rpc.PortsInspectResult
+		err := c.Call(ctx, "ports.inspect", rpc.Selector{
+			Port:        &port,
+			BindAddress: strPtrOrNil(bindIP),
+		}, &res)
+		if err != nil {
+			return nil, cliError(err)
+		}
+		lp := state.ToListening(res.Port)
+		return &lp, nil
+	}
+
+	lp, err := ports.FindByPort(port, bindIP)
+	if err != nil {
+		return nil, err
+	}
+	enriched := []ports.ListeningPort{*lp}
+	docker.EnrichPorts(enriched)
+	ports.Enrich(enriched)
+	ports.EnrichStats(enriched, docker.AllContainerStatsAsEntries())
+	ports.EnrichHealth(enriched, 2*time.Second)
+	return &enriched[0], nil
 }
 
 func colorHealthInfo(status string) string {
