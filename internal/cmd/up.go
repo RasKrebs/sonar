@@ -86,6 +86,12 @@ func upParams(args []string) (rpc.GroupsStartParams, error) {
 	index.Observe(wd)
 	cfg := index.Nearest(wd)
 	if cfg == nil {
+		// A file that is there but broken is a different problem from no file
+		// at all, and saying so is the difference between a two-second fix and
+		// a puzzled `ls -a`.
+		if bad := index.Invalid(); len(bad) > 0 {
+			return params, fmt.Errorf("%s cannot be used: %w", groups.ConfigName, bad[0].Err)
+		}
 		return params, fmt.Errorf("no %s at or above %s\nhint: `sonar init` writes one, or name a group: `sonar up <group>`",
 			groups.ConfigName, shortPath(wd))
 	}

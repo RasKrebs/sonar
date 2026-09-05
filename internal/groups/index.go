@@ -151,7 +151,13 @@ func (x *Index) Nearest(dir string) *Config {
 	if dir == "" {
 		return nil
 	}
+	// Configs are keyed by the directory Observe resolved, so a caller passing
+	// the unresolved path (/var/… against /private/var/… on macOS) has to be
+	// resolved the same way or nothing matches.
 	cur := filepath.Clean(dir)
+	if real, err := filepath.EvalSymlinks(cur); err == nil {
+		cur = real
+	}
 	for i := 0; i < maxWalk; i++ {
 		if cfg, ok := x.configs[cur]; ok {
 			return cfg

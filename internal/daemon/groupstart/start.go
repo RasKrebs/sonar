@@ -139,10 +139,20 @@ func start(ctx context.Context, rt *daemon.Runtime, cfg *groups.Config,
 	})
 }
 
-// alreadyRunning reports whether a service is up, and why we think so. The
-// group's own resolved state is the answer: it already joins declared ports,
-// run names and display names against what is listening.
+// alreadyRunning reports whether a service is up, and why we think so.
+//
+// The run registry is asked first, because it knows the instant a service has
+// been spawned while the scanner only knows a second or two later: two
+// `sonar up` runs in quick succession must not start the same service twice.
+// The group's resolved state answers for everything sonar did not start — it
+// already joins declared ports, run names and display names against what is
+// listening.
 func alreadyRunning(rt *daemon.Runtime, group string, svc groups.Service) (string, bool) {
+	for _, rec := range runsreg.Default.List() {
+		if rec.Group == group && rec.Name == svc.Name {
+			return fmt.Sprintf("already started by sonar (pid %d)", rec.PID), true
+		}
+	}
 	for _, g := range snapshot(rt).Groups {
 		if g.Name != group {
 			continue
