@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/state"
 )
 
@@ -279,17 +280,22 @@ type GroupsStartResult struct {
 	SubscriptionID string `json:"subscription_id"`
 }
 
+// GroupsStartChunk is one service's outcome, pushed as it happens: it was
+// started (pid and log_path), it was skipped (with the reason), or it could not
+// be started (error).
 type GroupsStartChunk struct {
 	Service string `json:"service"`
 	PID     int    `json:"pid,omitempty"`
 	LogPath string `json:"log_path,omitempty"`
 	Skipped bool   `json:"skipped,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 type GroupsStartEnd struct {
 	Started []string `json:"started"`
 	Skipped []string `json:"skipped"`
-	Failed  []string `json:"failed"`
+	Errors  []string `json:"errors"`
 }
 
 type GroupsAssignParams struct {
@@ -303,9 +309,48 @@ type GroupsAssignResult struct {
 	Group *string `json:"group" jsonschema:"nullable"`
 }
 
+// GroupConfig is a `.sonar.yaml` as the protocol carries it: the group name,
+// the services as contract rows, and the extra ports the file claims. It is
+// the `config` of groups.config.get and groups.config.set (contract §13.2).
+type GroupConfig struct {
+	Name     string          `json:"name"`
+	Services []state.Service `json:"services"`
+	Ports    []int           `json:"ports"`
+}
+
+type GroupsConfigGetParams struct {
+	Name *string `json:"name,omitempty"`
+	Path *string `json:"path,omitempty"`
+}
+
+type GroupsConfigGetResult struct {
+	Path   string      `json:"path"`
+	Config GroupConfig `json:"config"`
+}
+
+type GroupsConfigSetParams struct {
+	Path     string               `json:"path"`
+	Services []groups.ServiceEdit `json:"services"`
+}
+
+// GroupsConfigSetResult is the file after the write. Affected carries the
+// service names that were patched: this method mutates a config, not a port,
+// so there is no port key to report (step 1A.7).
+type GroupsConfigSetResult struct {
+	MutationResult
+	Path   string      `json:"path"`
+	Config GroupConfig `json:"config"`
+}
+
 type GroupsReloadResult struct {
-	Loaded int      `json:"loaded"`
-	Errors []string `json:"errors"`
+	Loaded int             `json:"loaded"`
+	Errors []ConfigProblem `json:"errors"`
+}
+
+// ConfigProblem is one `.sonar.yaml` that could not be used.
+type ConfigProblem struct {
+	Path  string `json:"path"`
+	Error string `json:"error"`
 }
 
 type GroupsInitParams struct {

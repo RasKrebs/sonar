@@ -244,6 +244,8 @@ func init() {
 	Describe("groups.start", GroupsStartParams{}, GroupsStartResult{}, GroupsStartChunk{}, GroupsStartEnd{})
 	Describe("groups.assign", GroupsAssignParams{}, GroupsAssignResult{}, nil, nil)
 	Describe("groups.reload", Empty{}, GroupsReloadResult{}, nil, nil)
+	Describe("groups.config.get", GroupsConfigGetParams{}, GroupsConfigGetResult{}, nil, nil)
+	Describe("groups.config.set", GroupsConfigSetParams{}, GroupsConfigSetResult{}, nil, nil)
 	Describe("groups.init", GroupsInitParams{}, GroupsInitResult{}, nil, nil)
 
 	// Runs.

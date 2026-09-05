@@ -294,6 +294,21 @@
         "path"
       ]
     },
+    "ConfigProblem": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "path",
+        "error"
+      ]
+    },
     "ConfigSetParams": {
       "properties": {
         "patch": {
@@ -879,6 +894,31 @@
         "services"
       ]
     },
+    "GroupConfig": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/definitions/Service"
+          },
+          "type": "array"
+        },
+        "ports": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name",
+        "services",
+        "ports"
+      ]
+    },
     "GroupsAssignParams": {
       "properties": {
         "port": {
@@ -943,6 +983,76 @@
         "affected",
         "key",
         "group"
+      ]
+    },
+    "GroupsConfigGetParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GroupsConfigGetResult": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/definitions/GroupConfig"
+        }
+      },
+      "type": "object",
+      "required": [
+        "path",
+        "config"
+      ]
+    },
+    "GroupsConfigSetParams": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/definitions/ServiceEdit"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "path",
+        "services"
+      ]
+    },
+    "GroupsConfigSetResult": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "affected": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/definitions/GroupConfig"
+        }
+      },
+      "type": "object",
+      "required": [
+        "ok",
+        "affected",
+        "path",
+        "config"
       ]
     },
     "GroupsInitParams": {
@@ -1109,7 +1219,7 @@
         },
         "errors": {
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/ConfigProblem"
           },
           "type": "array"
         }
@@ -1133,6 +1243,12 @@
         },
         "skipped": {
           "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
         }
       },
       "type": "object",
@@ -1154,7 +1270,7 @@
           },
           "type": "array"
         },
-        "failed": {
+        "errors": {
           "items": {
             "type": "string"
           },
@@ -1165,7 +1281,7 @@
       "required": [
         "started",
         "skipped",
-        "failed"
+        "errors"
       ]
     },
     "GroupsStartParams": {
@@ -2594,6 +2710,76 @@
         "port_actual"
       ]
     },
+    "ServiceEdit": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/definitions/ServicePatch"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name",
+        "patch"
+      ]
+    },
+    "ServicePatch": {
+      "properties": {
+        "description": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Session": {
       "properties": {
         "id": {
@@ -3137,6 +3323,22 @@
       },
       "result": {
         "$ref": "#/definitions/GroupsAssignResult"
+      }
+    },
+    "groups.config.get": {
+      "params": {
+        "$ref": "#/definitions/GroupsConfigGetParams"
+      },
+      "result": {
+        "$ref": "#/definitions/GroupsConfigGetResult"
+      }
+    },
+    "groups.config.set": {
+      "params": {
+        "$ref": "#/definitions/GroupsConfigSetParams"
+      },
+      "result": {
+        "$ref": "#/definitions/GroupsConfigSetResult"
       }
     },
     "groups.init": {
