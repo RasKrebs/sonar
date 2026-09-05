@@ -34,10 +34,11 @@ func FromListening(lp ports.ListeningPort) Port {
 		p.GroupSource = &gs
 	}
 
-	// Run is null for anything sonar did not start. Group stays empty until
-	// slice F5 records it on the run itself.
-	if lp.RunID != "" || lp.Tag != "" {
-		p.Run = &Run{ID: lp.RunID, Name: lp.Tag, RootPID: lp.RunRootPID}
+	// Run is null for anything sonar did not start. The group comes from the
+	// runs registry, which records it since `sonar start` (step 1A.5); a run
+	// registered by the older `sonar run --tag` reports its tag as both.
+	if lp.RunID != "" || lp.Tag != "" || lp.RunGroup != "" {
+		p.Run = &Run{ID: lp.RunID, Group: lp.RunGroup, Name: lp.Tag, RootPID: lp.RunRootPID}
 	}
 
 	// Stats and health are null unless they were actually collected.

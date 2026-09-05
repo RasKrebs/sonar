@@ -17,12 +17,38 @@ import (
 )
 
 // Entry is a single tagged run, keyed in the registry by its PID.
+//
+// Group, Name, Cwd, PPID and PortHint arrived with `sonar start` (step 1A.5).
+// They are all omitempty, so a file written by an older `sonar run` still
+// loads: Tag then stands for both the group and the name, which is exactly the
+// migration `sonar run --tag X` -> `sonar start --group X` promises.
 type Entry struct {
 	PID       int    `json:"pid"`
 	Tag       string `json:"tag"`
 	ID        string `json:"id,omitempty"`
 	Cmd       string `json:"cmd,omitempty"`
 	StartedAt string `json:"startedAt,omitempty"` // RFC3339
+	Group     string `json:"group,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	PPID      int    `json:"ppid,omitempty"`
+	PortHint  int    `json:"portHint,omitempty"`
+}
+
+// GroupOf is the group this run attributes its ports to.
+func (e Entry) GroupOf() string {
+	if e.Group != "" {
+		return e.Group
+	}
+	return e.Tag
+}
+
+// NameOf is the service name this run attributes its ports to.
+func (e Entry) NameOf() string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return e.Tag
 }
 
 // Registry is the in-memory view of the on-disk runs file: pid -> entry.
@@ -166,3 +192,7 @@ func save(reg *Registry) error {
 	}
 	return nil
 }
+
+// PIDAlive reports whether a process is still running. The daemon's in-memory
+// registry prunes with the same test the on-disk one uses.
+func PIDAlive(pid int) bool { return pidAlive(pid) }
