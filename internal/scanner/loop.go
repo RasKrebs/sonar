@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/raskrebs/sonar/internal/docker"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
 )
@@ -113,6 +114,10 @@ func osScan(include Include) ([]ports.ListeningPort, error) {
 	}
 	docker.EnrichPorts(pp)
 	ports.Enrich(pp)
+	// Resolve every port's group the same way the no-daemon path does, so the
+	// GROUP column, `list --group` and `list --tree` read the same through the
+	// socket as they do from a direct scan.
+	groups.Attribute(pp)
 	if include.Stats {
 		ports.EnrichStats(pp, docker.AllContainerStatsAsEntries())
 	}

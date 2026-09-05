@@ -27,7 +27,7 @@ const idleCheckInterval = 5 * time.Second
 // Capabilities lists the method families this build serves. Clients read it
 // from daemon.hello to tell whether, say, expose.* exists before calling it.
 // Later steps append their own family as they land.
-func Capabilities() []string { return []string{"state", "ports.read"} }
+func Capabilities() []string { return []string{"state", "ports.read", "streams"} }
 
 // Options configures a Server.
 type Options struct {

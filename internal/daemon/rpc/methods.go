@@ -85,7 +85,10 @@ type DaemonStatusResult struct {
 	Subscribers    int    `json:"subscribers"`
 	LastScanAt     string `json:"last_scan_at"`
 	ScanIntervalMs int    `json:"scan_interval_ms"`
-	DBPath         string `json:"db_path"`
+	// Scans counts the port scans this daemon has run. Two clients reading
+	// through the daemon must not make it grow faster than one does.
+	Scans  int64  `json:"scans"`
+	DBPath string `json:"db_path"`
 }
 
 // DaemonSchemaResult is the JSON Schema bundle this package generates.
@@ -196,9 +199,9 @@ type PortHealth struct {
 }
 
 type PortsLogsParams struct {
-	Selector Selector `json:"selector"`
-	Lines    int      `json:"lines,omitempty"`
-	Follow   bool     `json:"follow,omitempty"`
+	Selector
+	Lines  int  `json:"lines,omitempty"`
+	Follow bool `json:"follow,omitempty"`
 }
 
 // PortsLogsResult is the unary reply (follow: false). With follow: true the
@@ -220,10 +223,12 @@ type PortsGraphResult struct {
 }
 
 type GraphEdge struct {
-	FromPort int `json:"from_port"`
-	FromPID  int `json:"from_pid"`
-	ToPort   int `json:"to_port"`
-	ToPID    int `json:"to_pid"`
+	FromPort    int    `json:"from_port"`
+	FromPID     int    `json:"from_pid"`
+	FromProcess string `json:"from_process"`
+	ToPort      int    `json:"to_port"`
+	ToPID       int    `json:"to_pid"`
+	ToProcess   string `json:"to_process"`
 }
 
 type PortsHistoryParams struct {

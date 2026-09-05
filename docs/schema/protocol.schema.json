@@ -421,6 +421,9 @@
         "scan_interval_ms": {
           "type": "integer"
         },
+        "scans": {
+          "type": "integer"
+        },
         "db_path": {
           "type": "string"
         }
@@ -432,6 +435,7 @@
         "subscribers",
         "last_scan_at",
         "scan_interval_ms",
+        "scans",
         "db_path"
       ]
     },
@@ -791,19 +795,27 @@
         "from_pid": {
           "type": "integer"
         },
+        "from_process": {
+          "type": "string"
+        },
         "to_port": {
           "type": "integer"
         },
         "to_pid": {
           "type": "integer"
+        },
+        "to_process": {
+          "type": "string"
         }
       },
       "type": "object",
       "required": [
         "from_port",
         "from_pid",
+        "from_process",
         "to_port",
-        "to_pid"
+        "to_pid",
+        "to_process"
       ]
     },
     "Group": {
@@ -1900,8 +1912,20 @@
     },
     "PortsLogsParams": {
       "properties": {
-        "selector": {
-          "$ref": "#/definitions/Selector"
+        "port": {
+          "type": "integer"
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "bind_address": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "proxy_id": {
+          "type": "string"
         },
         "lines": {
           "type": "integer"
@@ -1910,10 +1934,7 @@
           "type": "boolean"
         }
       },
-      "type": "object",
-      "required": [
-        "selector"
-      ]
+      "type": "object"
     },
     "PortsLogsResult": {
       "properties": {
