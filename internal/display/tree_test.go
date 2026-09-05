@@ -2,6 +2,7 @@ package display
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/raskrebs/sonar/internal/ports"
@@ -109,5 +110,34 @@ SERVICES
 `
 	if got := buf.String(); got != want {
 		t.Errorf("RenderGroup =\n%s\n---- want ----\n%s", got, want)
+	}
+}
+
+// TestRenderGroupShowsServiceMetadata: the description, icon and colour a
+// project writes into its `.sonar.yaml` are shown, and a service without them
+// prints exactly as it did before (step 1A.7).
+func TestRenderGroupShowsServiceMetadata(t *testing.T) {
+	desc, icon, color := "The HTTP API", "*", "blue"
+	g := state.Group{
+		Name: "demo", Source: state.SourceFile, Status: "partial",
+		Services: []state.Service{
+			{Name: "api", Description: &desc, Icon: &icon, Color: &color, DependsOn: []string{}},
+			{Name: "db", DependsOn: []string{}},
+		},
+	}
+
+	var buf bytes.Buffer
+	RenderGroup(&buf, g, nil)
+	out := buf.String()
+
+	for _, want := range []string{"* api", "The HTTP API", "color blue"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "db") && (strings.Contains(line, "color") || strings.Contains(line, "*")) {
+			t.Errorf("a service without metadata should print plainly, got %q", line)
+		}
 	}
 }
