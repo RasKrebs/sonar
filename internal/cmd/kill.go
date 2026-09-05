@@ -318,9 +318,9 @@ func reportKill(w io.Writer, results []killer.Result, snapshot []ports.Listening
 // run — what would be.
 func killVerb(r killer.Result, dryRun bool) string {
 	if dryRun {
-		return "would " + string(r.Action)
+		return "would " + string(r.Method)
 	}
-	return string(r.Action)
+	return string(r.Method)
 }
 
 // describeResult names the process or container a row acted on.
@@ -340,7 +340,7 @@ func describeResult(r killer.Result, snapshot []ports.ListeningPort) string {
 			fmt.Fprintf(&b, " [%s]", r.BindAddress)
 		}
 	}
-	if r.Action == state.ActionDockerStop {
+	if r.Method == state.MethodDockerStop {
 		b.WriteString(" (container)")
 	}
 	return b.String()

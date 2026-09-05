@@ -1,30 +1,31 @@
 package state
 
-// KillAction names what was done (or, for a dry run, what would be done) to one
-// process or container. It is the `action` vocabulary of the daemon spec's
-// `sonar kill --json` example.
-type KillAction string
+// KillMethod names what was done (or, for a dry run, what would be done) to one
+// process or container. It is the `method` vocabulary of contract §3 as
+// amended by §17, which splits the former "signal" into sigterm and sigkill so
+// a caller can see whether escalation happened.
+type KillMethod string
 
 const (
-	// ActionSIGTERM is a polite stop: SIGTERM on unix, `taskkill` without /F
+	// MethodSIGTERM is a polite stop: SIGTERM on unix, `taskkill` without /F
 	// on Windows.
-	ActionSIGTERM KillAction = "sigterm"
-	// ActionSIGKILL is an unconditional stop: SIGKILL on unix, `taskkill /F`
+	MethodSIGTERM KillMethod = "sigterm"
+	// MethodSIGKILL is an unconditional stop: SIGKILL on unix, `taskkill /F`
 	// on Windows. Either requested with --force or reached by escalation.
-	ActionSIGKILL KillAction = "sigkill"
-	// ActionDockerStop is `docker stop <container>`.
-	ActionDockerStop KillAction = "docker_stop"
-	// ActionMapStop routes a daemon-owned proxy row to map.stop (contract §3).
+	MethodSIGKILL KillMethod = "sigkill"
+	// MethodDockerStop is `docker stop <container>`.
+	MethodDockerStop KillMethod = "docker_stop"
+	// MethodMapStop routes a daemon-owned proxy row to map.stop (contract §3).
 	// Reserved; the killer never produces it yet.
-	ActionMapStop KillAction = "map_stop"
-	// ActionNone means nothing was done: the target could not be resolved, or
+	MethodMapStop KillMethod = "map_stop"
+	// MethodNone means nothing was done: the target could not be resolved, or
 	// it was already gone.
-	ActionNone KillAction = "none"
+	MethodNone KillMethod = "none"
 )
 
-// AllKillActions is the enum used by schema generation.
-var AllKillActions = []KillAction{
-	ActionSIGTERM, ActionSIGKILL, ActionDockerStop, ActionMapStop, ActionNone,
+// AllKillMethods is the enum used by schema generation.
+var AllKillMethods = []KillMethod{
+	MethodSIGTERM, MethodSIGKILL, MethodDockerStop, MethodMapStop, MethodNone,
 }
 
 // KillResult is one row of a kill-shaped result (contract §3, daemon spec
@@ -36,7 +37,7 @@ type KillResult struct {
 	BindAddress string     `json:"bind_address"`
 	PID         int        `json:"pid"`
 	Name        string     `json:"name"`
-	Action      KillAction `json:"action" jsonschema:"enum=sigterm,enum=sigkill,enum=docker_stop,enum=map_stop,enum=none"`
+	Method      KillMethod `json:"method" jsonschema:"enum=sigterm,enum=sigkill,enum=docker_stop,enum=map_stop,enum=none"`
 	OK          bool       `json:"ok"`
 	Error       string     `json:"error,omitempty"`
 }

@@ -283,8 +283,8 @@ func TestKillPortsEscalatesOnAProcessThatIgnoresSIGTERM(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("results = %+v", results)
 	}
-	if results[0].Action != state.ActionSIGKILL {
-		t.Fatalf("action = %q, want sigkill after the grace period", results[0].Action)
+	if results[0].Method != state.MethodSIGKILL {
+		t.Fatalf("method = %q, want sigkill after the grace period", results[0].Method)
 	}
 	waitForPort(t, port, false)
 }

@@ -132,7 +132,8 @@ A process that ignores SIGTERM is sent SIGKILL once the port is still listening
 after `--grace` (5s by default); `--no-escalate` turns that off. A listener
 started through `sonar run` is stopped together with its whole process tree, so
 a dev server takes its watchers and workers with it. `--json` prints one row per
-process: `{port, bind_address, pid, name, action, ok, error}`.
+process: `{port, bind_address, pid, name, method, ok, error}`, where `method` is
+one of `sigterm`, `sigkill`, `docker_stop`, `map_stop` or `none`.
 
 ### View logs
 

@@ -75,7 +75,7 @@ func (e *engine) anyAlive(u *unit) bool {
 // children-before-parents order, and rewrites the affected rows to sigkill.
 func (e *engine) hardKill(u *unit, results []Result) {
 	mark := func(row int, err error) {
-		results[row].Action = state.ActionSIGKILL
+		results[row].Method = state.MethodSIGKILL
 		if err != nil {
 			results[row].OK = false
 			results[row].Error = err.Error()

@@ -343,14 +343,14 @@ func (e *engine) order(units []*unit) {
 // plan appends this unit's rows in the order they will be acted on, and records
 // where they landed so execute and escalate can update them in place.
 func (e *engine) plan(u *unit, opts Options, results []Result) []Result {
-	add := func(pid int, name string, action state.KillAction) {
+	add := func(pid int, name string, method state.KillMethod) {
 		u.rows = append(u.rows, len(results))
 		results = append(results, Result{
 			Port:        u.port,
 			BindAddress: u.bind,
 			PID:         pid,
 			Name:        name,
-			Action:      action,
+			Method:      method,
 			OK:          true,
 		})
 	}
@@ -360,12 +360,12 @@ func (e *engine) plan(u *unit, opts Options, results []Result) []Result {
 		u.rows = append(u.rows, len(results))
 		results = append(results, Result{
 			Port: u.port, BindAddress: u.bind, PID: u.root, Name: u.name,
-			Action: state.ActionNone, OK: false, Error: u.err.Error(),
+			Method: state.MethodNone, OK: false, Error: u.err.Error(),
 		})
 	case u.container != "":
-		add(0, u.name, state.ActionDockerStop)
+		add(0, u.name, state.MethodDockerStop)
 	case u.pgid != 0:
-		add(u.pgid, u.name, signalAction(opts.Force))
+		add(u.pgid, u.name, signalMethod(opts.Force))
 	default:
 		for _, pid := range u.pids {
 			// The scanner's display name belongs to the process holding the
@@ -375,7 +375,7 @@ func (e *engine) plan(u *unit, opts Options, results []Result) []Result {
 			if pid == u.listenPID && u.name != "" {
 				name = u.name
 			}
-			add(pid, name, signalAction(opts.Force))
+			add(pid, name, signalMethod(opts.Force))
 		}
 	}
 	return results
@@ -415,12 +415,12 @@ func (e *engine) execute(u *unit, opts Options, results []Result) {
 	}
 }
 
-// signalAction names the signal a non-escalated kill sends.
-func signalAction(force bool) state.KillAction {
+// signalMethod names the signal a non-escalated kill sends.
+func signalMethod(force bool) state.KillMethod {
 	if force {
-		return state.ActionSIGKILL
+		return state.MethodSIGKILL
 	}
-	return state.ActionSIGTERM
+	return state.MethodSIGTERM
 }
 
 // matchPort returns the scanned listeners on a port, filtered by bind address

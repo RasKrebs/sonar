@@ -118,10 +118,10 @@ func listener(port, pid int, opts ...func(*ports.ListeningPort)) ports.Listening
 	return lp
 }
 
-func actions(results []Result) []state.KillAction {
-	out := make([]state.KillAction, len(results))
+func methods(results []Result) []state.KillMethod {
+	out := make([]state.KillMethod, len(results))
 	for i, r := range results {
-		out[i] = r.Action
+		out[i] = r.Method
 	}
 	return out
 }
@@ -148,7 +148,7 @@ func TestDryRunPlansTheTreeAndTouchesNothing(t *testing.T) {
 		t.Fatalf("planned pids = %v, want %v (children before parents)", got, want)
 	}
 	for _, r := range results {
-		if r.Action != state.ActionSIGTERM || !r.OK {
+		if r.Method != state.MethodSIGTERM || !r.OK {
 			t.Errorf("row %+v: want a successful sigterm plan", r)
 		}
 		if r.Port != 3000 || r.BindAddress != "127.0.0.1" {
@@ -188,7 +188,7 @@ func TestWithoutTreeOnlyTheListenerIsSignalled(t *testing.T) {
 	if got := w.signalledPIDs(); !reflect.DeepEqual(got, []int{200}) {
 		t.Fatalf("signalled %v, want only the listener", got)
 	}
-	if len(results) != 1 || results[0].Action != state.ActionSIGTERM {
+	if len(results) != 1 || results[0].Method != state.MethodSIGTERM {
 		t.Fatalf("results = %+v", results)
 	}
 }
@@ -208,8 +208,8 @@ func TestEscalatesToSIGKILLWhenThePortStaysOpen(t *testing.T) {
 	if w.clock.slept != time.Second {
 		t.Fatalf("waited %v, want the full one second grace", w.clock.slept)
 	}
-	if got := actions(results); !reflect.DeepEqual(got, []state.KillAction{state.ActionSIGKILL}) {
-		t.Fatalf("actions = %v, want the row rewritten to sigkill", got)
+	if got := methods(results); !reflect.DeepEqual(got, []state.KillMethod{state.MethodSIGKILL}) {
+		t.Fatalf("methods = %v, want the row rewritten to sigkill", got)
 	}
 }
 
@@ -232,8 +232,8 @@ func TestNoEscalationWhenThePortCloses(t *testing.T) {
 	if w.clock.slept != 0 {
 		t.Fatalf("waited %v, want no wait once the port is free", w.clock.slept)
 	}
-	if results[0].Action != state.ActionSIGTERM {
-		t.Fatalf("action = %v, want sigterm", results[0].Action)
+	if results[0].Method != state.MethodSIGTERM {
+		t.Fatalf("method = %v, want sigterm", results[0].Method)
 	}
 }
 
@@ -252,8 +252,8 @@ func TestNoEscalateOptionLeavesTheProcessAlone(t *testing.T) {
 	if w.clock.slept != 0 {
 		t.Fatalf("waited %v with --no-escalate", w.clock.slept)
 	}
-	if results[0].Action != state.ActionSIGTERM {
-		t.Fatalf("action = %v", results[0].Action)
+	if results[0].Method != state.MethodSIGTERM {
+		t.Fatalf("method = %v", results[0].Method)
 	}
 }
 
@@ -271,8 +271,8 @@ func TestForceSkipsStraightToSIGKILL(t *testing.T) {
 	if w.clock.slept != 0 {
 		t.Fatalf("--force waited %v", w.clock.slept)
 	}
-	if results[0].Action != state.ActionSIGKILL {
-		t.Fatalf("action = %v", results[0].Action)
+	if results[0].Method != state.MethodSIGKILL {
+		t.Fatalf("method = %v", results[0].Method)
 	}
 }
 
@@ -298,10 +298,10 @@ func TestEscalationOnlyHardKillsWhatIsStillAlive(t *testing.T) {
 	if !reflect.DeepEqual(hard, []int{200}) {
 		t.Fatalf("SIGKILLed %v, want only the process still alive", hard)
 	}
-	if got := actions(results); !reflect.DeepEqual(got, []state.KillAction{
-		state.ActionSIGTERM, state.ActionSIGTERM, state.ActionSIGTERM, state.ActionSIGKILL,
+	if got := methods(results); !reflect.DeepEqual(got, []state.KillMethod{
+		state.MethodSIGTERM, state.MethodSIGTERM, state.MethodSIGTERM, state.MethodSIGKILL,
 	}) {
-		t.Fatalf("actions = %v", got)
+		t.Fatalf("methods = %v", got)
 	}
 }
 
@@ -322,7 +322,7 @@ func TestDockerContainersAreStoppedNotSignalled(t *testing.T) {
 	if !reflect.DeepEqual(w.stopped, []string{"pg"}) {
 		t.Fatalf("stopped = %v, want [pg]", w.stopped)
 	}
-	if results[0].Action != state.ActionDockerStop || results[0].Name != "db" {
+	if results[0].Method != state.MethodDockerStop || results[0].Name != "db" {
 		t.Fatalf("row = %+v", results[0])
 	}
 }
@@ -403,7 +403,7 @@ func TestAmbiguousPortReportsTheBindAddresses(t *testing.T) {
 
 	results := w.engine().kill(context.Background(), snapshot, []Target{{Port: 3000}}, Options{})
 
-	if len(results) != 1 || results[0].OK || results[0].Action != state.ActionNone {
+	if len(results) != 1 || results[0].OK || results[0].Method != state.MethodNone {
 		t.Fatalf("results = %+v, want one failed row", results)
 	}
 	if len(w.signals) != 0 {
@@ -485,7 +485,7 @@ func TestPIDTargetEscalatesOnTheProcess(t *testing.T) {
 func TestProxyTargetsAreRoutedToMapStop(t *testing.T) {
 	w := newWorld(npmTree())
 	results := w.engine().kill(context.Background(), nil, []Target{{ProxyID: "px1"}}, Options{})
-	if len(results) != 1 || results[0].OK || results[0].Action != state.ActionNone {
+	if len(results) != 1 || results[0].OK || results[0].Method != state.MethodNone {
 		t.Fatalf("results = %+v", results)
 	}
 }

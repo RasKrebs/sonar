@@ -14,10 +14,10 @@ import (
 
 func sampleResults() []killer.Result {
 	return []killer.Result{
-		{Port: 3000, BindAddress: "127.0.0.1", PID: 400, Name: "esbuild", Action: state.ActionSIGTERM, OK: true},
-		{Port: 3000, BindAddress: "127.0.0.1", PID: 300, Name: "vite", Action: state.ActionSIGKILL, OK: true},
-		{Port: 5432, BindAddress: "0.0.0.0", PID: 0, Name: "db", Action: state.ActionDockerStop, OK: true},
-		{Port: 8080, BindAddress: "127.0.0.1", PID: 900, Name: "nginx", Action: state.ActionNone, OK: false,
+		{Port: 3000, BindAddress: "127.0.0.1", PID: 400, Name: "esbuild", Method: state.MethodSIGTERM, OK: true},
+		{Port: 3000, BindAddress: "127.0.0.1", PID: 300, Name: "vite", Method: state.MethodSIGKILL, OK: true},
+		{Port: 5432, BindAddress: "0.0.0.0", PID: 0, Name: "db", Method: state.MethodDockerStop, OK: true},
+		{Port: 8080, BindAddress: "127.0.0.1", PID: 900, Name: "nginx", Method: state.MethodNone, OK: false,
 			Error: "not permitted to signal PID 900"},
 	}
 }
@@ -35,7 +35,7 @@ func TestKillJSONGolden(t *testing.T) {
     "bind_address": "127.0.0.1",
     "pid": 400,
     "name": "esbuild",
-    "action": "sigterm",
+    "method": "sigterm",
     "ok": true
   },
   {
@@ -43,7 +43,7 @@ func TestKillJSONGolden(t *testing.T) {
     "bind_address": "127.0.0.1",
     "pid": 300,
     "name": "vite",
-    "action": "sigkill",
+    "method": "sigkill",
     "ok": true
   },
   {
@@ -51,7 +51,7 @@ func TestKillJSONGolden(t *testing.T) {
     "bind_address": "0.0.0.0",
     "pid": 0,
     "name": "db",
-    "action": "docker_stop",
+    "method": "docker_stop",
     "ok": true
   },
   {
@@ -59,7 +59,7 @@ func TestKillJSONGolden(t *testing.T) {
     "bind_address": "127.0.0.1",
     "pid": 900,
     "name": "nginx",
-    "action": "none",
+    "method": "none",
     "ok": false,
     "error": "not permitted to signal PID 900"
   }
