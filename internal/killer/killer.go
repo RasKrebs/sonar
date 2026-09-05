@@ -166,6 +166,7 @@ type unit struct {
 	pgid      int    // non-zero when the whole process group is signalled
 	pids      []int  // children-first order; ignored when pgid or container is set
 	root      int    // the listener (or run root) this unit is anchored on
+	listenPID int    // the pid actually holding the socket, when there is one
 	depth     int    // ancestry depth of root, used to order units children-first
 	err       error  // resolution failure: emits a single failed row
 	rows      []int  // indexes into the result slice, filled during execution
@@ -248,7 +249,7 @@ func (e *engine) resolve(t Target, snapshot []ports.ListeningPort, opts Options)
 		if !e.alive(t.PID) {
 			return []*unit{{root: t.PID, err: codedf(CodeNotFound, "", "no process with PID %d", t.PID)}}
 		}
-		u := &unit{root: t.PID, name: e.table.Name(t.PID)}
+		u := &unit{root: t.PID, name: e.table.Name(t.PID), listenPID: t.PID}
 		e.fillProcesses(u, t.PID, opts.Tree)
 		return []*unit{u}
 	}
@@ -257,7 +258,7 @@ func (e *engine) resolve(t Target, snapshot []ports.ListeningPort, opts Options)
 
 // unitFor builds the unit for a scanned listener.
 func (e *engine) unitFor(lp *ports.ListeningPort, opts Options) *unit {
-	u := &unit{port: lp.Port, bind: lp.BindAddress, name: lp.DisplayName()}
+	u := &unit{port: lp.Port, bind: lp.BindAddress, name: lp.DisplayName(), listenPID: lp.PID}
 
 	if lp.Type == ports.PortTypeDocker && lp.DockerContainer != "" {
 		u.container = lp.DockerContainer
@@ -367,8 +368,11 @@ func (e *engine) plan(u *unit, opts Options, results []Result) []Result {
 		add(u.pgid, u.name, signalAction(opts.Force))
 	default:
 		for _, pid := range u.pids {
+			// The scanner's display name belongs to the process holding the
+			// socket; every other process in the tree is named from the
+			// process table, so a run root reads as "npm", not as its port.
 			name := e.table.Name(pid)
-			if pid == u.root && u.name != "" {
+			if pid == u.listenPID && u.name != "" {
 				name = u.name
 			}
 			add(pid, name, signalAction(opts.Force))
