@@ -67,6 +67,7 @@ type Client struct {
 	nextID   int64
 	pending  map[string]chan rpc.Message
 	subs     []*Subscription
+	streams  map[string]*Stream
 	closed   bool
 	closeErr error
 
@@ -110,6 +111,7 @@ func handshake(ctx context.Context, conn net.Conn, socket string, info ClientInf
 		enc:     rpc.NewEncoder(conn),
 		socket:  socket,
 		pending: map[string]chan rpc.Message{},
+		streams: map[string]*Stream{},
 		done:    make(chan struct{}),
 	}
 	go c.readLoop()
@@ -252,6 +254,9 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) dispatchNotification(msg rpc.Message) {
+	if c.dispatchStream(msg) {
+		return
+	}
 	c.mu.Lock()
 	subs := append([]*Subscription{}, c.subs...)
 	c.mu.Unlock()
@@ -277,6 +282,7 @@ func (c *Client) shutdown(err error) {
 	for _, s := range subs {
 		s.close()
 	}
+	c.closeStreams(err)
 }
 
 // Close disconnects from the daemon.
