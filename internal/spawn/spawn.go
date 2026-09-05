@@ -261,29 +261,70 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// ForwardSignals relays the interrupts this process receives to the child's
-// process group (daemon spec, `sonar start` step 5), so Ctrl+C in the terminal
-// stops the whole tree rather than orphaning it. The returned function stops
-// forwarding and must be called once the child has been waited for.
-func (h *Handle) ForwardSignals() (stop func()) {
-	ch := make(chan os.Signal, 4)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case sig := <-ch:
-				_ = h.Signal(sig)
-			case <-done:
-				return
+// Forwarder relays the interrupts this process receives to a child's process
+// group (daemon spec, `sonar start` step 5).
+//
+// It must be created *before* the child is started. Installing the handler
+// first is what guarantees the child starts with a default SIGINT disposition:
+// exec turns a caught signal into the default action, while an ignored one
+// stays ignored — and a `sonar start` line in a `dev.sh` is a background job,
+// so it inherits an ignored SIGINT from the shell. Without this, Ctrl+C would
+// reach neither sonar nor the dev server it is supervising.
+type Forwarder struct {
+	ch   chan os.Signal
+	stop chan struct{}
+	once sync.Once
+
+	mu      sync.Mutex
+	handle  *Handle
+	pending []os.Signal
+}
+
+// CatchSignals starts catching SIGINT and SIGTERM. Nothing is forwarded until
+// Forward names the child; signals that arrive before then are replayed to it,
+// so a Ctrl+C in the moment between fork and registration is not lost.
+func CatchSignals() *Forwarder {
+	f := &Forwarder{ch: make(chan os.Signal, 8), stop: make(chan struct{})}
+	signal.Notify(f.ch, os.Interrupt, syscall.SIGTERM)
+	go f.run()
+	return f
+}
+
+// Forward starts sending caught signals to h's process group.
+func (f *Forwarder) Forward(h *Handle) {
+	f.mu.Lock()
+	f.handle = h
+	pending := f.pending
+	f.pending = nil
+	f.mu.Unlock()
+	for _, sig := range pending {
+		_ = h.Signal(sig)
+	}
+}
+
+// Stop stops catching signals and restores the default behaviour.
+func (f *Forwarder) Stop() {
+	f.once.Do(func() {
+		signal.Stop(f.ch)
+		close(f.stop)
+	})
+}
+
+func (f *Forwarder) run() {
+	for {
+		select {
+		case sig := <-f.ch:
+			f.mu.Lock()
+			h := f.handle
+			if h == nil {
+				f.pending = append(f.pending, sig)
 			}
+			f.mu.Unlock()
+			if h != nil {
+				_ = h.Signal(sig)
+			}
+		case <-f.stop:
+			return
 		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			signal.Stop(ch)
-			close(done)
-		})
 	}
 }

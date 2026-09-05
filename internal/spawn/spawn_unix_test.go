@@ -116,6 +116,12 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 	}
 	defer out.Close()
 
+	// The child is in its own process group, so the terminal's SIGINT would
+	// never reach it: the forwarder is what makes Ctrl+C work, and it is
+	// installed before the child so the child starts with a default SIGINT.
+	fwd := CatchSignals()
+	defer fwd.Stop()
+
 	h, err := Spawn(context.Background(), Request{
 		Argv: []string{script}, Cwd: dir, Group: "itest", Name: "dev.sh",
 		Stdout: out, Stderr: out,
@@ -123,6 +129,7 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fwd.Forward(h)
 
 	grandchild, err := strconv.Atoi(strings.TrimSpace(waitFile(t, pidFile, 5*time.Second)))
 	if err != nil {
@@ -132,10 +139,6 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 		t.Fatalf("the grandchild (pid %d) never started", grandchild)
 	}
 
-	// The child is in its own process group, so the terminal's SIGINT would
-	// never reach it: ForwardSignals is what makes Ctrl+C work.
-	stop := h.ForwardSignals()
-	defer stop()
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}

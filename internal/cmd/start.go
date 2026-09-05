@@ -94,6 +94,12 @@ func startRun(cmd *cobra.Command, args []string) error {
 // child owns its own process group, signals are forwarded to it and sonar exits
 // with the child's code.
 func startAttached(cmd *cobra.Command, argv []string, cwd string, res spawn.Resolution) error {
+	// Catch the interrupts before the child exists: a `sonar start` line in a
+	// dev.sh runs as a background job with SIGINT ignored, and installing a
+	// handler here is what gives the child a working Ctrl+C again.
+	fwd := spawn.CatchSignals()
+	defer fwd.Stop()
+
 	h, err := spawn.Spawn(cmd.Context(), spawn.Request{
 		Argv:     argv,
 		Cwd:      cwd,
@@ -104,12 +110,10 @@ func startAttached(cmd *cobra.Command, argv []string, cwd string, res spawn.Reso
 	if err != nil {
 		return err
 	}
+	fwd.Forward(h)
 
 	daemonKnows := registerRun(h)
 	defer unregisterRun(h.PID, daemonKnows)
-
-	stop := h.ForwardSignals()
-	defer stop()
 
 	code, err := h.Wait()
 	if err != nil {
@@ -119,7 +123,7 @@ func startAttached(cmd *cobra.Command, argv []string, cwd string, res spawn.Reso
 		// Mirror the child's exit code without cobra printing usage over it.
 		cmd.SilenceUsage, cmd.SilenceErrors = true, true
 		unregisterRun(h.PID, daemonKnows)
-		stop()
+		fwd.Stop()
 		os.Exit(code)
 	}
 	return nil
