@@ -192,3 +192,7 @@ func save(reg *Registry) error {
 	}
 	return nil
 }
+
+// PIDAlive reports whether a process is still running. The daemon's in-memory
+// registry prunes with the same test the on-disk one uses.
+func PIDAlive(pid int) bool { return pidAlive(pid) }

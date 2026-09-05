@@ -2246,6 +2246,12 @@
             "type": "integer"
           },
           "type": "array"
+        },
+        "port_hint": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
         }
       },
       "type": "object",
@@ -2257,7 +2263,8 @@
         "cmd",
         "cwd",
         "started_at",
-        "ports"
+        "ports",
+        "status"
       ]
     },
     "RunsListResult": {
@@ -2302,6 +2309,9 @@
         },
         "id": {
           "type": "string"
+        },
+        "allow_outside_home": {
+          "type": "boolean"
         }
       },
       "type": "object",
