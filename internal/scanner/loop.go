@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/raskrebs/sonar/internal/docker"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
 )
@@ -113,6 +114,10 @@ func osScan(include Include) ([]ports.ListeningPort, error) {
 	}
 	docker.EnrichPorts(pp)
 	ports.Enrich(pp)
+	// Group attribution, written back onto the rows. Step 1A.4b replaces this
+	// with a long-lived index and the store's pins; the resolver itself is the
+	// same one `sonar list` runs.
+	groups.Attribute(pp)
 	if include.Stats {
 		ports.EnrichStats(pp, docker.AllContainerStatsAsEntries())
 	}
