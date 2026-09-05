@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/raskrebs/sonar/internal/display"
 	"gopkg.in/yaml.v3"
@@ -12,8 +14,44 @@ import (
 // Config holds user preferences loaded from ~/.config/sonar/config.yaml.
 type Config struct {
 	List     ListConfig     `yaml:"list"`
+	Daemon   DaemonConfig   `yaml:"daemon"`
 	Color    *bool          `yaml:"color"`    // pointer: nil = unset, distinguishes from explicit false
 	Services map[int]string `yaml:"services"` // port -> label, merged over built-in table
+}
+
+// DefaultIdleTimeout is how long `sonar serve` stays up with no clients, no
+// subscribers and no keepalive connection.
+const DefaultIdleTimeout = 30 * time.Minute
+
+// DaemonConfig holds `sonar serve` settings.
+type DaemonConfig struct {
+	// IdleTimeout is a Go duration ("30m", "2h"). "0" disables idle shutdown;
+	// empty means DefaultIdleTimeout.
+	IdleTimeout string `yaml:"idle_timeout"`
+	// LogLevel is debug, info, warn or error. Empty means info.
+	LogLevel string `yaml:"log_level"`
+}
+
+// ResolvedIdleTimeout returns the parsed idle timeout, falling back to
+// DefaultIdleTimeout when the setting is absent. A zero return means "never".
+func (d DaemonConfig) ResolvedIdleTimeout() time.Duration {
+	if strings.TrimSpace(d.IdleTimeout) == "" {
+		return DefaultIdleTimeout
+	}
+	v, err := time.ParseDuration(strings.TrimSpace(d.IdleTimeout))
+	if err != nil || v < 0 {
+		return DefaultIdleTimeout
+	}
+	return v
+}
+
+// ResolvedLogLevel returns the configured level, defaulting to "info".
+func (d DaemonConfig) ResolvedLogLevel() string {
+	level := strings.ToLower(strings.TrimSpace(d.LogLevel))
+	if !validLogLevels[level] {
+		return "info"
+	}
+	return level
 }
 
 // ListConfig holds defaults for the `sonar list` command.
@@ -66,6 +104,10 @@ const template = `# sonar configuration
 #   filter: ""      # docker | user | system | "" (all)
 #   all: false      # include desktop apps by default
 
+# daemon:
+#   idle_timeout: 30m   # stop when unused this long; 0 disables idle shutdown
+#   log_level: info     # debug | info | warn | error
+
 # color: true       # set false to disable colored output
 
 # services:         # label custom/unknown ports (port: name)
@@ -91,6 +133,8 @@ func WriteTemplate(force bool) error {
 	}
 	return nil
 }
+
+var validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
 var validSorts = map[string]bool{"port": true, "pid": true, "name": true, "type": true}
 var validFilters = map[string]bool{"docker": true, "user": true, "system": true}
@@ -121,6 +165,18 @@ func validate(cfg *Config) []string {
 	if cfg.List.Filter != "" && !validFilters[cfg.List.Filter] {
 		warnings = append(warnings, fmt.Sprintf("config: invalid filter %q — ignoring", cfg.List.Filter))
 		cfg.List.Filter = ""
+	}
+
+	if v := strings.TrimSpace(cfg.Daemon.IdleTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d < 0 {
+			warnings = append(warnings, fmt.Sprintf("config: invalid daemon.idle_timeout %q — using %s", v, DefaultIdleTimeout))
+			cfg.Daemon.IdleTimeout = ""
+		}
+	}
+
+	if v := strings.TrimSpace(cfg.Daemon.LogLevel); v != "" && !validLogLevels[strings.ToLower(v)] {
+		warnings = append(warnings, fmt.Sprintf("config: invalid daemon.log_level %q — using info", v))
+		cfg.Daemon.LogLevel = ""
 	}
 
 	for port := range cfg.Services {

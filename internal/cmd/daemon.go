@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// daemonCmd is the group for daemon inspection and control. Slice F0 adds only
-// `schema`; F1 adds status, stop, restart, path and log.
+// daemonCmd is the group for daemon inspection and control. The subcommands
+// that talk to a running daemon live in daemon_ctl.go.
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Inspect and control the sonar daemon",
