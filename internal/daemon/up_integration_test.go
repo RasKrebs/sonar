@@ -91,6 +91,10 @@ services:
 	if err := json.Unmarshal(upOut, &summary); err != nil {
 		t.Fatalf("decoding sonar up --json: %v\n%s", err, upOut)
 	}
+	// Registered before the first assertion: a failure half way through must
+	// not leave three detached listeners squatting on ports for the next run.
+	t.Cleanup(func() { killChunks(summary.Services) })
+
 	if len(summary.Errors) != 0 {
 		t.Fatalf("sonar up reported failures: %+v", summary)
 	}
@@ -116,7 +120,6 @@ services:
 	if apiChunk.PID == 0 {
 		t.Fatal("api never started")
 	}
-	t.Cleanup(func() { killChunks(summary.Services) })
 
 	// api only started once db was listening, so by now all three are up and
 	// the group is running.
