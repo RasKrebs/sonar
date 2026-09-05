@@ -453,3 +453,7 @@ func probePort(port int, bind string) bool {
 	_ = conn.Close()
 	return true
 }
+
+// Alive reports whether a process with this pid currently exists. Callers use
+// it to tell a pid from a port when a bare number could be either.
+func Alive(pid int) bool { return pidAlive(pid) }
