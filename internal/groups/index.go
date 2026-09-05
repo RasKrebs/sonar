@@ -20,6 +20,7 @@ type Index struct {
 	invalid map[string]error   // config path -> parse/validation error
 	compose map[string]string  // compose project -> working_dir label
 	probed  map[string]bool    // directories already looked at
+	stamps  map[string]stamp   // config path -> mtime and size when it was read
 }
 
 // InvalidConfig is one config file that could not be used, reported by
@@ -36,6 +37,7 @@ func NewIndex() *Index {
 		invalid: map[string]error{},
 		compose: map[string]string{},
 		probed:  map[string]bool{},
+		stamps:  map[string]stamp{},
 	}
 }
 
@@ -48,6 +50,7 @@ func (x *Index) Add(cfg *Config) {
 	x.configs[cfg.Dir] = cfg
 	x.probed[cfg.Dir] = true
 	delete(x.invalid, cfg.Path)
+	x.note(cfg.Path)
 }
 
 // AddFile loads one config path into the index. A file that does not parse or
@@ -62,6 +65,9 @@ func (x *Index) AddFile(path string) error {
 		}
 		x.invalid[abs] = err
 		x.probed[filepath.Dir(abs)] = true
+		// A file that does not parse is still watched: fixing it is exactly
+		// the moment the daemon should pick it up.
+		x.note(abs)
 		return err
 	}
 	x.Add(cfg)
