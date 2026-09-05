@@ -136,7 +136,7 @@ sonar list --health            # HTTP health checks
 sonar list --filter docker     # only Docker ports
 sonar list --sort name         # port | pid | name | type
 sonar list -a                  # include desktop apps
-sonar list -c port,name,group,cpu,mem
+sonar list -c port,process,group,cpu,mem
 sonar list --host user@server  # scan a remote machine over SSH
 ```
 
@@ -317,6 +317,15 @@ always stopped together with its process group.
 `{port, bind_address, pid, name, method, ok, error}`, where `method` is
 `sigterm`, `sigkill`, `docker_stop`, `map_stop` or `none`. An empty sweep exits
 0; an unknown group exits 1.
+
+### `sonar map`
+
+```sh
+sonar map 6873 3002        # also serve the service on 6873 from port 3002
+```
+
+Runs a TCP proxy in the foreground until you stop it. `sonar kill` reports a
+mapping it stopped as `map_stop`.
 
 ### `sonar rename`, `sonar assign`, `sonar history`
 
@@ -561,8 +570,12 @@ daemon: check `docker ps`. A process that ignores SIGTERM needs `-f`, and one
 supervised by something else (systemd, Compose `restart: always`) comes back
 by design — stop the supervisor.
 
+**Reporting a bug.** Include these two, plus the last lines of
+`sonar daemon log`:
+
 ```sh
 sonar version
+sonar daemon status
 # check
 ```
 
