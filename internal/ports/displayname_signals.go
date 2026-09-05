@@ -64,12 +64,9 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 		}
 	}
 
-	// 5. Project root and automatic group. Done after the loop above so that
-	//    Cwd and the Docker fields are already populated.
-	for i := range pp {
-		pp[i].ProjectRoot = findGitRoot(pp[i].Cwd)
-		pp[i].Group, pp[i].GroupSource = deriveGroup(&pp[i], pp[i].ProjectRoot)
-	}
+	// Project root and group attribution are not done here: they belong to
+	// internal/groups, which runs the full precedence chain (pin, run, config,
+	// Compose, git root) over the finished scan.
 }
 
 type pidEntry struct {

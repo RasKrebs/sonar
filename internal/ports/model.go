@@ -80,6 +80,10 @@ type ListeningPort struct {
 	DockerComposeService string
 	DockerComposeProject string
 	DockerContainerPort  int
+	// DockerComposeWorkingDir is the com.docker.compose.project.working_dir
+	// label: where `docker compose` was invoked. Used by the group resolver to
+	// merge a Compose project into the git checkout that owns it.
+	DockerComposeWorkingDir string
 }
 
 // PortKey returns a unique identifier for this listening socket (port + bind address).

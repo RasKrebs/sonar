@@ -22,6 +22,10 @@ type container struct {
 	portMappings   []portMapping
 	composeService string
 	composeProject string
+	// composeWorkingDir is the directory `docker compose` was run from
+	// (label com.docker.compose.project.working_dir). The group resolver uses
+	// it to merge a Compose project into the git checkout it belongs to.
+	composeWorkingDir string
 }
 
 type portMapping struct {
@@ -59,6 +63,7 @@ func EnrichPorts(pp []ports.ListeningPort) {
 		pp[i].DockerImage = c.image
 		pp[i].DockerComposeService = c.composeService
 		pp[i].DockerComposeProject = c.composeProject
+		pp[i].DockerComposeWorkingDir = c.composeWorkingDir
 		pp[i].DockerContainerPort = mappingMap[pp[i].Port].containerPort
 	}
 }
@@ -381,7 +386,8 @@ func StopContainer(name string) error {
 
 // listContainers runs `docker ps` and parses the output.
 func listContainers() ([]container, error) {
-	format := "{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Label \"com.docker.compose.project\"}}"
+	format := "{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Label \"com.docker.compose.service\"}}" +
+		"\t{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.project.working_dir\"}}"
 	out, err := exec.Command("docker", "ps", "--format", format).Output()
 	if err != nil {
 		return nil, err
@@ -391,17 +397,18 @@ func listContainers() ([]container, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) < 5 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
 			continue
 		}
 
 		c := container{
-			name:           parts[0],
-			image:          parts[1],
-			portMappings:   parsePorts(parts[2]),
-			composeService: parts[3],
-			composeProject: parts[4],
+			name:              parts[0],
+			image:             parts[1],
+			portMappings:      parsePorts(parts[2]),
+			composeService:    parts[3],
+			composeProject:    parts[4],
+			composeWorkingDir: parts[5],
 		}
 		containers = append(containers, c)
 	}
