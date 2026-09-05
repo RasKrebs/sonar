@@ -84,6 +84,10 @@ func runKill(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if len(targets) == 0 {
+		return reportKill(os.Stdout, nil, snapshot, killJSONFlag, killDryRunFlag)
+	}
+
 	opts := killer.Options{
 		Tree:   killTreeFlag,
 		Force:  forceFlag,
@@ -161,12 +165,10 @@ func killTargets(args []string, snapshot []ports.ListeningPort, bindIP string) (
 		if len(targets) > 0 {
 			return nil, false, fmt.Errorf("--all cannot be combined with ports or pids")
 		}
+		// An empty sweep is not a failure: there was simply nothing to stop.
 		members, err := sweepTargets(snapshot, killFilterFlag, killProjectFlag)
 		if err != nil {
 			return nil, false, err
-		}
-		if len(members) == 0 {
-			return nil, false, fmt.Errorf("no matching ports found")
 		}
 		return members, true, nil
 	}
