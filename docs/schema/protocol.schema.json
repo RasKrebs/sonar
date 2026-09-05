@@ -2492,6 +2492,36 @@
             }
           ]
         },
+        "description": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "depends_on": {
           "items": {
             "type": "string"
@@ -2519,6 +2549,9 @@
         "cwd",
         "port",
         "health",
+        "description",
+        "icon",
+        "color",
         "depends_on",
         "running",
         "port_actual"

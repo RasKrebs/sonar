@@ -4,14 +4,20 @@ package state
 // the port the service is actually listening on right now, resolved by the
 // group resolver (spec 3 needs this join).
 type Service struct {
-	Name       string   `json:"name"`
-	Cmd        string   `json:"cmd"`
-	Cwd        string   `json:"cwd"`
-	Port       *int     `json:"port" jsonschema:"nullable"`
-	Health     *string  `json:"health" jsonschema:"nullable"`
-	DependsOn  []string `json:"depends_on"`
-	Running    bool     `json:"running"`
-	PortActual *int     `json:"port_actual" jsonschema:"nullable"`
+	Name   string  `json:"name"`
+	Cmd    string  `json:"cmd"`
+	Cwd    string  `json:"cwd"`
+	Port   *int    `json:"port" jsonschema:"nullable"`
+	Health *string `json:"health" jsonschema:"nullable"`
+	// Description, Icon and Color are user-authored metadata from
+	// `.sonar.yaml` (contract §13.1). The daemon stores and serves them; what
+	// an icon or a colour means is the client's business.
+	Description *string  `json:"description" jsonschema:"nullable"`
+	Icon        *string  `json:"icon" jsonschema:"nullable"`
+	Color       *string  `json:"color" jsonschema:"nullable"`
+	DependsOn   []string `json:"depends_on"`
+	Running     bool     `json:"running"`
+	PortActual  *int     `json:"port_actual" jsonschema:"nullable"`
 }
 
 // Group is a set of ports that belong to one project. Members are port

@@ -18,14 +18,20 @@ const ConfigName = ".sonar.yaml"
 // other way is not silently ignored. `sonar init` always writes ConfigName.
 const altConfigName = ".sonar.yml"
 
-// Service is one entry of a config's `services:` list.
+// Service is one entry of a config's `services:` list. Description, Icon and
+// Color are user-authored metadata the daemon never infers and never
+// interprets: it carries them onto state.Service so a client can render them
+// (contract §13.1).
 type Service struct {
-	Name      string   `yaml:"name"`
-	Cmd       string   `yaml:"cmd,omitempty"`
-	Cwd       string   `yaml:"cwd,omitempty"`
-	Port      int      `yaml:"port,omitempty"`
-	Health    string   `yaml:"health,omitempty"`
-	DependsOn []string `yaml:"depends_on,omitempty"`
+	Name        string   `yaml:"name"`
+	Cmd         string   `yaml:"cmd,omitempty"`
+	Cwd         string   `yaml:"cwd,omitempty"`
+	Port        int      `yaml:"port,omitempty"`
+	Health      string   `yaml:"health,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Icon        string   `yaml:"icon,omitempty"`
+	Color       string   `yaml:"color,omitempty"`
+	DependsOn   []string `yaml:"depends_on,omitempty"`
 }
 
 // Config is a parsed `.sonar.yaml`. Path and Dir are filled by Load and are
