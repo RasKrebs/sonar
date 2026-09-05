@@ -89,7 +89,8 @@ func namedTypes() []any {
 		state.Session{}, state.SessionRecord{}, state.Claim{},
 		state.Snapshot{}, state.Delta{}, state.Event{}, state.Service{},
 		state.Stats{}, state.Health{}, state.Docker{}, state.Run{},
-		Error{},
+		state.KillResult{},
+		Error{}, MutationResult{}, KillEnvelope{},
 	}
 }
 
@@ -227,7 +228,7 @@ func init() {
 	// Ports.
 	Describe("ports.list", PortsListParams{}, PortsListResult{}, nil, nil)
 	Describe("ports.inspect", Selector{}, PortsInspectResult{}, nil, nil)
-	Describe("ports.kill", PortsKillParams{}, KillResult{}, nil, nil)
+	Describe("ports.kill", PortsKillParams{}, KillEnvelope{}, nil, nil)
 	Describe("ports.rename", PortsRenameParams{}, PortsRenameResult{}, nil, nil)
 	Describe("ports.next", PortsNextParams{}, PortsNextResult{}, nil, nil)
 	Describe("ports.wait", PortsWaitParams{}, StreamStart{}, PortsWaitChunk{}, PortsWaitEnd{})
@@ -239,7 +240,7 @@ func init() {
 	// Groups.
 	Describe("groups.list", Empty{}, GroupsListResult{}, nil, nil)
 	Describe("groups.inspect", GroupsInspectParams{}, GroupsInspectResult{}, nil, nil)
-	Describe("groups.kill", GroupsKillParams{}, KillResult{}, nil, nil)
+	Describe("groups.kill", GroupsKillParams{}, KillEnvelope{}, nil, nil)
 	Describe("groups.start", GroupsStartParams{}, GroupsStartResult{}, GroupsStartChunk{}, GroupsStartEnd{})
 	Describe("groups.assign", GroupsAssignParams{}, GroupsAssignResult{}, nil, nil)
 	Describe("groups.reload", Empty{}, GroupsReloadResult{}, nil, nil)
@@ -259,7 +260,7 @@ func init() {
 	// Sessions (spec 2, slice M4).
 	Describe("sessions.list", SessionsListParams{}, SessionsListResult{}, nil, nil)
 	Describe("sessions.inspect", SessionsInspectParams{}, SessionsInspectResult{}, nil, nil)
-	Describe("sessions.kill", SessionsKillParams{}, KillResult{}, nil, nil)
+	Describe("sessions.kill", SessionsKillParams{}, KillEnvelope{}, nil, nil)
 
 	// Config.
 	Describe("config.get", Empty{}, ConfigGetResult{}, nil, nil)

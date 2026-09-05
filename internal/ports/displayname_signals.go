@@ -58,6 +58,7 @@ func enrichDisplayNameSignals(pp []ListeningPort) {
 		}
 		if run := tagger.lookup(pid, pidInfo); run.ok {
 			pp[i].Tag = run.tag
+			pp[i].RunGroup = run.group
 			pp[i].RunID = run.id
 			pp[i].RunRootPID = run.rootPID
 			pp[i].StartedAt = run.startedAt

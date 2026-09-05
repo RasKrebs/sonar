@@ -12,17 +12,19 @@ import (
 
 // fakeRows is the snapshot every read handler is exercised against: a user
 // process, a Docker row, a desktop app and a second bind of the same port.
+//
+// Groups are not set here: the scan tick resolves them, so a row's group is
+// whatever the resolver derives — for the Docker rows, the Compose project.
 func fakeRows() []ports.ListeningPort {
 	return []ports.ListeningPort{
 		{
 			Port: 3000, PID: 100, Process: "node", Command: "node server.js",
 			BindAddress: "127.0.0.1", IPVersion: "IPv4", Type: ports.PortTypeUser,
-			Group: "web", GroupSource: "file", Cwd: "/home/dev/web",
+			Cwd: "/home/dev/web",
 		},
 		{
 			Port: 3000, PID: 101, Process: "node", Command: "node server.js",
 			BindAddress: "::1", IPVersion: "IPv6", Type: ports.PortTypeUser,
-			Group: "web", GroupSource: "file",
 		},
 		{
 			Port: 5432, PID: 200, Process: "com.docker.backend",
@@ -117,7 +119,7 @@ func TestPortsListFilters(t *testing.T) {
 		want   []int
 	}{
 		{"by type", rpc.PortsListParams{Filter: str("docker")}, []int{5432}},
-		{"by group", rpc.PortsListParams{Group: str("web")}, []int{3000, 3000}},
+		{"by group", rpc.PortsListParams{Group: str("shop")}, []int{5432}},
 		{"by run name", rpc.PortsListParams{Group: str("api")}, []int{9000}},
 		{"by run id", rpc.PortsListParams{Group: str("run-7")}, []int{9000}},
 		{"by ip version", rpc.PortsListParams{IPVersion: str("IPv6")}, []int{3000}},

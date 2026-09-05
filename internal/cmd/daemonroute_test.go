@@ -24,15 +24,15 @@ import (
 )
 
 // routedRows is the scan the in-process daemon serves. Nothing here is
-// enriched, so what the daemon publishes and what the direct renderers would
-// print from the same rows are comparable byte for byte.
+// enriched, so what the daemon publishes and what the direct path renders from
+// the same rows are comparable byte for byte. Groups are left unset: both paths
+// run the resolver, and it is the resolver's answer that has to agree.
 func routedRows() []ports.ListeningPort {
 	return []ports.ListeningPort{
 		{
 			Port: 3000, PID: 100, Process: "node", Command: "node server.js",
 			BindAddress: "127.0.0.1", IPVersion: "IPv4", Type: ports.PortTypeUser,
-			User: "dev", Cwd: "/home/dev/web", Group: "web", GroupSource: "file",
-			ProjectRoot: "/home/dev/web",
+			User: "dev", Cwd: "/home/dev/web",
 		},
 		{
 			Port: 5432, PID: 200, Process: "com.docker.backend",
@@ -161,8 +161,8 @@ func TestListReadsThroughTheDaemon(t *testing.T) {
 	if got[0].Port != 3000 || got[1].Port != 5432 {
 		t.Fatalf("got ports %d and %d, want 3000 and 5432", got[0].Port, got[1].Port)
 	}
-	if got[0].Group != "web" || got[0].GroupSource != "file" {
-		t.Fatalf("the group did not survive the socket: %+v", got[0])
+	if got[1].Group != "shop" || got[1].GroupSource != "auto" {
+		t.Fatalf("the resolved group did not survive the socket: %+v", got[1])
 	}
 	if got[1].DockerImage != "postgres:17" || got[1].DisplayName() != "db" {
 		t.Fatalf("docker fields did not survive the socket: %+v", got[1])
@@ -181,7 +181,11 @@ func TestDaemonAndDirectJSONMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listPorts: %v", err)
 	}
-	direct := applyListFilters(append([]ports.ListeningPort{}, rows...), listQuery{})
+	// The direct path resolves groups per command; the daemon resolves them in
+	// the scan tick. Both have to land on the same answer.
+	direct := append([]ports.ListeningPort{}, rows...)
+	groups.Attribute(direct)
+	direct = applyListFilters(direct, listQuery{})
 
 	var daemonJSON, directJSON bytes.Buffer
 	if err := display.RenderJSON(&daemonJSON, viaDaemon); err != nil {
@@ -208,7 +212,7 @@ func TestListFiltersThroughTheDaemon(t *testing.T) {
 		{"apps hidden", listQuery{}, []int{3000, 5432}},
 		{"apps shown", listQuery{showApps: true}, []int{3000, 5432, 7000}},
 		{"by type", listQuery{filter: "docker"}, []int{5432}},
-		{"by group", listQuery{group: "web"}, []int{3000}},
+		{"by group", listQuery{group: "shop"}, []int{5432}},
 		{"by ip version", listQuery{ipVersion: "IPv6"}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

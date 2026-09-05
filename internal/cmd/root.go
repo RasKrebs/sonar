@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -54,9 +55,15 @@ func init() {
 	}
 }
 
+// errSilent asks for a non-zero exit without a further message: the command
+// has already reported the failure itself, as `--json` output does.
+var errSilent = errors.New("")
+
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if !errors.Is(err, errSilent) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }

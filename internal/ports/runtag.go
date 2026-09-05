@@ -15,7 +15,8 @@ type runTagger struct {
 }
 
 type tagResult struct {
-	tag       string
+	tag       string // the run's service name
+	group     string // the run's group
 	id        string
 	rootPID   int    // pid of the registry entry the listener descends from
 	startedAt string // RFC3339, recorded when the run was registered
@@ -54,7 +55,7 @@ func (t *runTagger) walk(pid int, pidInfo map[int]pidEntry, depth int) tagResult
 
 	// Direct hit: this PID is itself a tagged run.
 	if e, ok := t.reg.LookupByPID(pid); ok {
-		res := tagResult{tag: e.Tag, id: e.ID, rootPID: e.PID, startedAt: e.StartedAt, ok: true}
+		res := tagResult{tag: e.NameOf(), group: e.GroupOf(), id: e.ID, rootPID: e.PID, startedAt: e.StartedAt, ok: true}
 		t.cache[pid] = res
 		return res
 	}

@@ -116,14 +116,24 @@ Shows everything about a port: full command, user, bind address, CPU/memory/thre
 ### Kill processes
 
 ```sh
-sonar kill 3000                            # SIGTERM
-sonar kill 3000 -f                         # SIGKILL
-sonar kill-all --filter docker             # stop all Docker containers
-sonar kill-all --project my-app            # stop a Compose project
-sonar kill-all --filter user -y            # skip confirmation
+sonar kill 3000                            # SIGTERM, then SIGKILL after 5s
+sonar kill 3000 5432 -f                    # SIGKILL both straight away
+sonar kill 3000 --tree                     # the listener and everything below it
+sonar kill --pid 12345 --tree              # by process id
+sonar kill -g my-app                       # a whole group, confirms unless -y
+sonar kill --all --filter docker -y        # every container publishing a port
+sonar kill --all --project my-app          # one Compose project
+sonar kill 3000 --tree --dry-run --json    # show the plan, change nothing
 ```
 
 Docker containers are stopped with `docker stop` instead of sending signals.
+
+A process that ignores SIGTERM is sent SIGKILL once the port is still listening
+after `--grace` (5s by default); `--no-escalate` turns that off. A listener
+started through `sonar run` is stopped together with its whole process tree, so
+a dev server takes its watchers and workers with it. `--json` prints one row per
+process: `{port, bind_address, pid, name, method, ok, error}`, where `method` is
+one of `sigterm`, `sigkill`, `docker_stop`, `map_stop` or `none`.
 
 ### View logs
 

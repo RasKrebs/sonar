@@ -53,6 +53,15 @@ type Options struct {
 	Demand        Demand
 	Publish       Publisher
 
+	// Store persists renames, group pins, known `.sonar.yaml` roots and the
+	// port history ring. Nil means the loop scans without a database.
+	Store Store
+
+	// Runs returns the run registry group attribution consults. It is a
+	// function because `sonar start` installs the registry after the loop is
+	// built; nil, or a nil return, means groups.PortRuns{}.
+	Runs func() groups.Registry
+
 	// Scan overrides the OS scan. Tests inject a fake; production leaves it nil
 	// and gets ports.Scan + docker.EnrichPorts + ports.Enrich.
 	Scan func(include Include) ([]ports.ListeningPort, error)
@@ -67,6 +76,8 @@ type Loop struct {
 	now  func() time.Time
 
 	wake chan struct{}
+
+	attr attribution
 
 	mu           sync.Mutex
 	snap         state.Snapshot
@@ -114,10 +125,6 @@ func osScan(include Include) ([]ports.ListeningPort, error) {
 	}
 	docker.EnrichPorts(pp)
 	ports.Enrich(pp)
-	// Resolve every port's group the same way the no-daemon path does, so the
-	// GROUP column, `list --group` and `list --tree` read the same through the
-	// socket as they do from a direct scan.
-	groups.Attribute(pp)
 	if include.Stats {
 		ports.EnrichStats(pp, docker.AllContainerStatsAsEntries())
 	}
@@ -227,7 +234,15 @@ func (l *Loop) scanAndPublish(include Include) {
 	if !changed {
 		return
 	}
-	l.opts.Publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
+	l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
+}
+
+// publish hands the transition to the daemon and then writes its port
+// transitions to the history ring, in that order: a client sees the change
+// before the disk does (daemon spec, "SQLite").
+func (l *Loop) publish(prev, next state.Snapshot, events []state.Event) {
+	l.opts.Publish(prev, next, events)
+	l.record(events)
 }
 
 // scanLocked performs a scan and swaps it into the cache. It returns the new
@@ -251,7 +266,10 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		ports.EnrichHealth(pp, HealthTimeout)
 	}
 
-	rows := state.FromListeningAll(pp)
+	// Resolve every port's group with the pins the store holds, apply the
+	// stored renames and build the group collection, all before the snapshot
+	// is assembled: what gets published is already attributed and named.
+	rows, groupRows := l.attribute(pp)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -274,9 +292,9 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		At:            l.lastScanAt.Format(time.RFC3339),
 		DaemonVersion: l.opts.DaemonVersion,
 		Ports:         rows,
-		// Groups arrive with the resolver in step 1A.2; the other three
-		// collections belong to specs 2 and 3. They are always arrays.
-		Groups:   []state.Group{},
+		Groups:        groupRows,
+		// Tunnels, proxies and sessions belong to specs 2 and 3. Every
+		// collection is always an array, never null.
 		Tunnels:  []state.Tunnel{},
 		Proxies:  []state.Proxy{},
 		Sessions: []state.SessionRecord{},
@@ -426,7 +444,7 @@ func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
 		return state.Snapshot{}, err
 	}
 	if changed {
-		l.opts.Publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
+		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
 	}
 	return next, nil
 }
