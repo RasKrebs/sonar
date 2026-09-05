@@ -40,7 +40,7 @@ func TestUpStartsAGroupInOrderAndKillStopsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dbPort, apiPort, webPort := freePort(t), freePort(t), freePort(t)
+	dbPort, apiPort, webPort := unusedPort(t), unusedPort(t), unusedPort(t)
 	config := fmt.Sprintf(`# the demo project
 name: demo
 services:
@@ -275,6 +275,25 @@ func waitForGroupStatus(t *testing.T, e *env, name, want string, timeout time.Du
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("group %s never reached status %q (last saw %q)", name, want, last)
+}
+
+// unusedPort is freePort plus the check freePort cannot make: that nothing is
+// actually answering there. A run that was killed mid-flight leaves detached
+// services behind, and a config pointing at one of their ports would make
+// `sonar up` skip everything as "already running".
+func unusedPort(t *testing.T) int {
+	t.Helper()
+	seen := map[int]bool{}
+	for i := 0; i < 50; i++ {
+		port := freePort(t)
+		if seen[port] || portOpen(port) {
+			continue
+		}
+		seen[port] = true
+		return port
+	}
+	t.Fatal("could not find a port nothing is listening on")
+	return 0
 }
 
 // waitForPortGone reports whether a port stopped listening in time.
