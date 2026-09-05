@@ -16,6 +16,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// detachedEnv marks the child `sonar serve` that `serve --detach` forked. The
+// child is not a different command, only a differently plumbed one.
+const detachedEnv = "SONAR_DAEMON_DETACHED"
+
 var serveDetach bool
 
 var serveCmd = &cobra.Command{
@@ -43,8 +47,12 @@ func serveRun(cmd *cobra.Command, _ []string) error {
 		return detachDaemon(cmd.Context(), socket)
 	}
 
+	// A detached child's stderr is already redirected into the log file, so
+	// mirroring the logger there too would double every line.
+	alsoStderr := os.Getenv(detachedEnv) == ""
+
 	logger, closeLog, err := daemon.NewLogger(daemon.LogPath(),
-		daemon.ParseLogLevel(loadedConfig.Daemon.ResolvedLogLevel()), true)
+		daemon.ParseLogLevel(loadedConfig.Daemon.ResolvedLogLevel()), alsoStderr)
 	if err != nil {
 		return err
 	}
@@ -101,7 +109,7 @@ func detachDaemon(ctx context.Context, socket string) error {
 	defer logFile.Close()
 
 	child := exec.Command(exe, "serve")
-	child.Env = os.Environ()
+	child.Env = append(os.Environ(), detachedEnv+"=1")
 	child.Stdin = nil
 	child.Stdout = logFile
 	child.Stderr = logFile
