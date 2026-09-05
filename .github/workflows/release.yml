@@ -55,6 +55,7 @@ jobs:
         env:
           GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
         run: |
           VERSION="${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('{0}-dev', github.ref_name) }}"
           go build -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" -o sonar .
@@ -91,6 +92,7 @@ jobs:
         env:
           GOOS: windows
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
         run: |
           VERSION="${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('{0}-dev', github.ref_name) }}"
           go build -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" -o sonar.exe .

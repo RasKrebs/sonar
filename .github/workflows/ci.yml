@@ -48,6 +48,10 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: README examples
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: scripts/readme-check.sh
+
   integration:
     name: Daemon integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
