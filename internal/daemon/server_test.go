@@ -370,6 +370,11 @@ func TestQueueOverflowDisconnects(t *testing.T) {
 		h.srv.broadcastEvent(state.Event{Kind: "port_up", At: "now"})
 		select {
 		case <-conn.closed:
+			// closed is closed just before the connection is deregistered, so
+			// give that last step a moment rather than racing it.
+			for j := 0; j < 100 && h.srv.Clients() != 0; j++ {
+				time.Sleep(time.Millisecond)
+			}
 			if h.srv.Clients() != 0 {
 				t.Fatalf("overflowing client still registered after %d messages", i)
 			}
