@@ -194,12 +194,15 @@ func PatchServices(path string, edits []ServiceEdit) (*Config, error) {
 
 	services := mappingValue(root, "services")
 	for _, edit := range edits {
-		if edit.Patch.Empty() {
-			continue
-		}
+		// The service is checked even for a patch that changes nothing: a
+		// caller naming a service that is not there has made a mistake, and an
+		// empty patch is not the place to swallow it.
 		svc := findService(services, edit.Name)
 		if svc == nil {
 			return nil, &ServiceNotFoundError{Path: abs, Name: edit.Name}
+		}
+		if edit.Patch.Empty() {
+			continue
 		}
 		applyPatch(svc, edit.Patch)
 	}

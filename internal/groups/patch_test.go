@@ -282,3 +282,14 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestPatchServicesChecksTheNameEvenForAnEmptyPatch: a patch that changes
+// nothing still has to name a service that exists, or a typo goes unreported.
+func TestPatchServicesChecksTheNameEvenForAnEmptyPatch(t *testing.T) {
+	path := writePatchable(t, commented)
+	_, err := PatchServices(path, []ServiceEdit{{Name: "worker"}})
+	var missing *ServiceNotFoundError
+	if !errors.As(err, &missing) {
+		t.Fatalf("expected a ServiceNotFoundError, got %v", err)
+	}
+}
