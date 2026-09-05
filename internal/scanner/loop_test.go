@@ -13,26 +13,51 @@ import (
 )
 
 // TestBackoffSequence pins the adaptive interval from the spec: base 2 s, ×1.5
-// per unchanged tick, capped at 10 s.
+// per unchanged tick, capped at 10 s when the daemon only answers RPC reads and
+// at 5 s while someone is subscribed.
 func TestBackoffSequence(t *testing.T) {
-	want := []time.Duration{
-		3 * time.Second,
-		4500 * time.Millisecond,
-		6750 * time.Millisecond,
-		10 * time.Second,
-		10 * time.Second,
+	tests := []struct {
+		name string
+		max  time.Duration
+		want []time.Duration
+	}{
+		{
+			name: "rpc reads only",
+			max:  MaxInterval,
+			want: []time.Duration{
+				3 * time.Second,
+				4500 * time.Millisecond,
+				6750 * time.Millisecond,
+				10 * time.Second,
+				10 * time.Second,
+			},
+		},
+		{
+			name: "a subscriber is connected",
+			max:  SubscribedMaxInterval,
+			want: []time.Duration{
+				3 * time.Second,
+				4500 * time.Millisecond,
+				5 * time.Second,
+				5 * time.Second,
+			},
+		},
 	}
-	got := BaseInterval
-	for i, w := range want {
-		got = backoff(got)
-		if got != w {
-			t.Fatalf("backoff step %d = %s, want %s", i+1, got, w)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BaseInterval
+			for i, w := range tt.want {
+				got = backoff(got, tt.max)
+				if got != w {
+					t.Fatalf("backoff step %d = %s, want %s", i+1, got, w)
+				}
+			}
+		})
 	}
 }
 
 func TestBackoffNeverDropsBelowBase(t *testing.T) {
-	if got := backoff(time.Millisecond); got != BaseInterval {
+	if got := backoff(time.Millisecond, MaxInterval); got != BaseInterval {
 		t.Errorf("backoff(1ms) = %s, want the base interval %s", got, BaseInterval)
 	}
 }
@@ -74,9 +99,11 @@ func TestLoopBacksOffThenSnapsBack(t *testing.T) {
 	}
 }
 
+// TestBackoffCapsAtMaxInterval: with nobody subscribed the daemon is serving
+// RPC reads only and may back all the way off to 10 s.
 func TestBackoffCapsAtMaxInterval(t *testing.T) {
 	l := New(Options{
-		Demand: func() (int, Include) { return 1, Include{} },
+		Demand: func() (int, Include) { return 0, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
 		},
@@ -86,6 +113,36 @@ func TestBackoffCapsAtMaxInterval(t *testing.T) {
 	}
 	if got, want := l.Status().IntervalMs, int(MaxInterval/time.Millisecond); got != want {
 		t.Errorf("interval = %dms, want the %dms cap", got, want)
+	}
+}
+
+// TestBackoffCapsAtFiveSecondsWithASubscriber: a live view must never lag a
+// change by more than the subscribed cap, so the backoff stops at 5 s while
+// anyone is subscribed.
+func TestBackoffCapsAtFiveSecondsWithASubscriber(t *testing.T) {
+	subs := 0
+	l := New(Options{
+		Demand: func() (int, Include) { return subs, Include{} },
+		Scan: func(Include) ([]ports.ListeningPort, error) {
+			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
+		},
+	})
+
+	subs = 1
+	for i := 0; i < 20; i++ {
+		l.scanAndPublish(Include{})
+	}
+	if got, want := l.Status().IntervalMs, int(SubscribedMaxInterval/time.Millisecond); got != want {
+		t.Errorf("interval with a subscriber = %dms, want the %dms cap", got, want)
+	}
+
+	// The last subscriber leaves: the loop may back off the rest of the way.
+	subs = 0
+	for i := 0; i < 20; i++ {
+		l.scanAndPublish(Include{})
+	}
+	if got, want := l.Status().IntervalMs, int(MaxInterval/time.Millisecond); got != want {
+		t.Errorf("interval with no subscribers = %dms, want the %dms cap", got, want)
 	}
 }
 
