@@ -38,12 +38,9 @@ func TestRenameShowsUpInTheNextDelta(t *testing.T) {
 	h, st := storeHarness(t, ctx)
 	c := h.dial(ctx)
 
-	var snap state.Snapshot
-	if e := c.call("state.subscribe", rpc.StateSubscribeParams{}, &snap); e != nil {
-		t.Fatalf("state.subscribe: %v", e)
-	}
-	if len(snap.Ports) != 1 || nameOf(snap.Ports[0]) == "storefront" {
-		t.Fatalf("snapshot = %+v, want the unrenamed port", snap.Ports)
+	first := c.subscribeAndSettle(rpc.StateSubscribeParams{})
+	if len(first.Ports.Added) != 1 || nameOf(first.Ports.Added[0]) == "storefront" {
+		t.Fatalf("first delta = %+v, want the unrenamed port", first.Ports)
 	}
 
 	// The rescan the write triggers publishes before the reply is written, so

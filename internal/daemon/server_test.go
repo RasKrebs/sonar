@@ -498,3 +498,25 @@ func TestKeepaliveDisablesIdleTimeout(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 }
+
+// nextDelta reads until a state.delta notification arrives and decodes it.
+func (c *testClient) nextDelta() state.Delta {
+	c.t.Helper()
+	var d state.Delta
+	m := c.nextNotification(rpc.MethodStateDelta)
+	if err := json.Unmarshal(m.Params, &d); err != nil {
+		c.t.Fatalf("decoding state.delta: %v", err)
+	}
+	return d
+}
+
+// subscribeAndSettle subscribes and waits for the delta the subscription's own
+// wake produces, so a test that needs the ports on screen has them. The
+// subscribe reply itself is the cached snapshot and may still be empty.
+func (c *testClient) subscribeAndSettle(p rpc.StateSubscribeParams) state.Delta {
+	c.t.Helper()
+	if e := c.call("state.subscribe", p, nil); e != nil {
+		c.t.Fatalf("state.subscribe: %v", e)
+	}
+	return c.nextDelta()
+}

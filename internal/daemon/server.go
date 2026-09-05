@@ -366,9 +366,16 @@ func (s *Server) demand() (int, scanner.Include) {
 	return n, inc
 }
 
-// subscribe registers a connection as a subscriber and hands it the current
+// subscribe registers a connection as a subscriber and hands it the cached
 // snapshot as the reply to its own state.subscribe call. Both happen under the
 // publish lock, so no delta can slip in between the two.
+//
+// The reply never waits for a scan: the snapshot is whatever the loop last
+// published — with stats and health null when the loop has not been collecting
+// them — and Wake makes the loop scan immediately, so the fields the subscriber
+// asked for arrive in the first delta rather than delaying the reply by a scan.
+// The delta's seq is the cached snapshot's seq plus one, so the §15 resync rule
+// is unchanged.
 func (s *Server) subscribe(c *Conn, id json.RawMessage, include scanner.Include, events bool) {
 	s.subsMu.Lock()
 	snap := s.loop.Cached()

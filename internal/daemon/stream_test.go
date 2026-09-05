@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
+	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/scanner"
+	"github.com/raskrebs/sonar/internal/state"
 )
 
 // unregisterHandler drops a method again. Only tests need it: RegisterHandler
@@ -235,5 +238,64 @@ func TestStreamSendFailsAfterCancel(t *testing.T) {
 	scancel()
 	if err := s.Send(map[string]string{"line": "x"}); err == nil {
 		t.Fatal("Send on a cancelled stream should fail")
+	}
+}
+
+// TestSubscribeRepliesWithoutWaitingForAScan is contract §22's open follow-up:
+// `state.subscribe {include: ["stats"]}` used to rescan before replying, so on
+// a machine where collecting stats is slow the first snapshot arrived seconds
+// late. The reply now comes from the cache — stats may be null in it — and the
+// tick the subscription wakes delivers them in the first delta.
+func TestSubscribeRepliesWithoutWaitingForAScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const scanDelay = 700 * time.Millisecond
+	h := &testHarness{t: t}
+	h.rows = []ports.ListeningPort{{
+		Port: 8123, PID: 42, Process: "python3", Command: "python3 -m http.server",
+	}}
+	h.loop = scanner.New(scanner.Options{
+		DaemonVersion: "test",
+		Scan: func(inc scanner.Include) ([]ports.ListeningPort, error) {
+			time.Sleep(scanDelay)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			out := append([]ports.ListeningPort{}, h.rows...)
+			if inc.Stats {
+				for i := range out {
+					out[i].CPUPercent, out[i].MemoryRSS = 12.5, 1<<20
+				}
+			}
+			return out, nil
+		},
+	})
+	h.srv = New(Options{Socket: "/test/sonar.sock", Version: "test", Scanner: h.loop})
+	go h.loop.Run(ctx)
+	c := h.dial(ctx)
+
+	start := time.Now()
+	var snap state.Snapshot
+	if e := c.call("state.subscribe", rpc.StateSubscribeParams{
+		Include: rpc.Include{"stats"},
+	}, &snap); e != nil {
+		t.Fatalf("state.subscribe: %v", e)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("state.subscribe replied after %v against a %v scan, want under 100ms", took, scanDelay)
+	}
+
+	// The woken tick carries the fields the subscriber asked for.
+	delta := c.nextDelta()
+	if len(delta.Ports.Added) != 1 {
+		t.Fatalf("first delta = %+v, want the port", delta.Ports)
+	}
+	if delta.Ports.Added[0].Stats == nil || delta.Ports.Added[0].Stats.CPUPercent != 12.5 {
+		t.Fatalf("first delta carries stats %+v, want the collected ones", delta.Ports.Added[0].Stats)
+	}
+	// Seq semantics (§15) are unchanged: the delta continues from the snapshot
+	// the subscribe reply carried.
+	if delta.Seq != snap.Seq+1 {
+		t.Errorf("delta seq = %d, want the snapshot's %d plus one", delta.Seq, snap.Seq)
 	}
 }

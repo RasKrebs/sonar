@@ -128,12 +128,12 @@ func handleSubscribe(_ context.Context, req *Request) (any, error) {
 		return nil, err
 	}
 
-	// Make sure the cache is fresh and carries whatever this subscriber asked
-	// for before registering, so the snapshot it gets is not an empty one.
-	if _, err := req.Runtime.Scanner.Snapshot(include); err != nil {
-		return nil, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
-			"check `sonar daemon log` for the scanner error")
-	}
+	// No scan here. subscribe replies from the cached snapshot and wakes the
+	// loop, so a subscriber that asked for stats or health is answered at once
+	// and gets those fields in the delta the woken tick publishes. Scanning
+	// first would hold the reply for the length of a stats collection — seconds
+	// on a busy machine — and the first snapshot would still be a delta behind
+	// by the time it arrived.
 	req.Runtime.Server().subscribe(req.Conn, req.ID, include, p.Events)
 	return nil, ErrResponseSent
 }
