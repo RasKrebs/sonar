@@ -51,7 +51,9 @@ func handlePortsKill(ctx context.Context, req *Request) (any, error) {
 		Escalate: p.Escalate,
 		DryRun:   p.DryRun,
 	}
-	return killEnvelope(killer.KillPorts(ctx, targets, opts)), nil
+	rows := killer.KillPorts(ctx, targets, opts)
+	afterKill(req, opts.DryRun)
+	return killEnvelope(rows), nil
 }
 
 func handleGroupsKill(ctx context.Context, req *Request) (any, error) {
@@ -83,7 +85,20 @@ func handleGroupsKill(ctx context.Context, req *Request) (any, error) {
 		Grace:  time.Duration(p.GraceMs) * time.Millisecond,
 		DryRun: p.DryRun,
 	}
-	return killEnvelope(killer.KillPorts(ctx, targets, opts)), nil
+	rows := killer.KillPorts(ctx, targets, opts)
+	afterKill(req, opts.DryRun)
+	return killEnvelope(rows), nil
+}
+
+// afterKill rescans and publishes, so the ports that just went away are gone
+// from the very next read and their port_down rows reach the history ring even
+// when nobody is subscribed. Without it the caller's own `sonar list` would
+// still be served from the snapshot taken before the kill (step 1A.7).
+func afterKill(req *Request, dryRun bool) {
+	if dryRun {
+		return
+	}
+	republish(req.Runtime)
 }
 
 // killSnapshot is the state selectors and group members are resolved against:

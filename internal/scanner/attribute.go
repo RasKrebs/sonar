@@ -81,6 +81,9 @@ func (l *Loop) attribute(pp []ports.ListeningPort) ([]state.Port, []state.Group)
 	}
 	st := l.opts.Store
 	l.seedRoots(st)
+	// A config edited or deleted since the last tick is re-read here, so the
+	// daemon's long-lived index tracks the disk without a filesystem watcher.
+	l.refreshStaleConfigs()
 
 	pins, renames := l.load(st)
 

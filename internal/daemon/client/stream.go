@@ -49,6 +49,17 @@ type Stream struct {
 	queue  []json.RawMessage
 	ended  bool
 	endVal End
+
+	// claimed is guarded by the client's own mutex, not this one: it is part
+	// of the registry's bookkeeping, not the stream's.
+	claimed bool
+}
+
+// finished reports whether the stream has seen its end.
+func (s *Stream) finished() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
 }
 
 // ID is the subscription id the daemon assigned.
@@ -101,7 +112,36 @@ func (c *Client) Stream(ctx context.Context, method string, params, result any) 
 
 	st := c.streamFor(reply.SubscriptionID)
 	st.c, st.id = c, reply.SubscriptionID
+	c.claim(reply.SubscriptionID)
 	return st, nil
+}
+
+// claim marks a stream as handed to its caller. A stream that has already
+// ended can now be dropped from the registry; one that has not stays, so the
+// chunks still to come find it.
+func (c *Client) claim(id string) {
+	c.mu.Lock()
+	if s, ok := c.streams[id]; ok {
+		s.claimed = true
+	}
+	c.mu.Unlock()
+	c.retire(id)
+}
+
+// retire forgets a stream once it has both ended and been claimed.
+//
+// Both halves matter. Forgetting on the end alone loses a stream that finished
+// before its own reply was decoded — `groups.start` on a group where every
+// service is already running answers in microseconds — and the caller would
+// then be handed a fresh, empty stream that never ends. Forgetting on the
+// claim alone would orphan the chunks still in flight.
+func (c *Client) retire(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.streams[id]
+	if ok && s.claimed && s.finished() {
+		delete(c.streams, id)
+	}
 }
 
 // streamFor returns the stream registered under id, creating it if the first
@@ -144,10 +184,8 @@ func (c *Client) dispatchStream(msg rpc.Message) bool {
 			return true
 		}
 		s := c.streamFor(end.ID)
-		c.mu.Lock()
-		delete(c.streams, end.ID)
-		c.mu.Unlock()
 		s.finish(End{Data: end.Data, Err: end.Error})
+		c.retire(end.ID)
 		return true
 	}
 	return false

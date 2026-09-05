@@ -355,11 +355,15 @@ func handlePortsHealth(_ context.Context, req *Request) (any, error) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			r := ports.ProbeHealth(targets[i].BindAddress, targets[i].Port, "/", scanner.HealthTimeout)
+			// One health vocabulary on the wire: the probe's finer verdict
+			// travels as the reason (step 1A.7).
+			status, reason := state.NormalizeHealth(r.Status)
 			results[i] = rpc.PortHealth{
 				Port:      targets[i].Port,
-				Status:    r.Status,
+				Status:    status,
 				Code:      r.StatusCode,
 				LatencyMs: r.Latency.Milliseconds(),
+				Reason:    reason,
 			}
 		}(i)
 	}

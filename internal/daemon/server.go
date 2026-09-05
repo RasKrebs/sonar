@@ -562,11 +562,15 @@ func filterPorts(pp []state.Port, include scanner.Include) []state.Port {
 	return out
 }
 
+// filterPort strips what this subscriber did not ask for. Health a
+// `.sonar.yaml` asked the daemon to poll is the exception: the config declared
+// it, so it is state every subscriber sees whether or not it asked for
+// `include: ["health"]` (step 1A.7).
 func filterPort(p state.Port, include scanner.Include) state.Port {
 	if !include.Stats {
 		p.Stats = nil
 	}
-	if !include.Health {
+	if !include.Health && p.Health != nil && !p.Health.Configured {
 		p.Health = nil
 	}
 	return p

@@ -166,3 +166,46 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("want an error for a missing file")
 	}
 }
+
+// TestLoadServiceMetadata covers contract §13.1: description, icon and colour
+// are free-form strings read from the file and never inferred.
+func TestLoadServiceMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ConfigName)
+	writeFile(t, path, `name: demo
+services:
+  - name: api
+    cmd: uv run api
+    port: 8000
+    health: /health
+    description: The HTTP API
+    icon: server
+    color: "#3b82f6"
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	svc := cfg.Services[0]
+	if svc.Description != "The HTTP API" || svc.Icon != "server" || svc.Color != "#3b82f6" {
+		t.Fatalf("metadata not read: %+v", svc)
+	}
+
+	row := ServiceRow(svc)
+	if row.Description == nil || *row.Description != "The HTTP API" {
+		t.Fatalf("description not carried to the contract row: %+v", row)
+	}
+	if row.Icon == nil || *row.Icon != "server" || row.Color == nil || *row.Color != "#3b82f6" {
+		t.Fatalf("icon/colour not carried to the contract row: %+v", row)
+	}
+}
+
+// TestServiceRowLeavesMetadataNull keeps "absent" distinct from "empty" on the
+// wire: a service without metadata publishes null, not "".
+func TestServiceRowLeavesMetadataNull(t *testing.T) {
+	row := ServiceRow(Service{Name: "db"})
+	if row.Description != nil || row.Icon != nil || row.Color != nil || row.Health != nil {
+		t.Fatalf("expected null metadata, got %+v", row)
+	}
+}

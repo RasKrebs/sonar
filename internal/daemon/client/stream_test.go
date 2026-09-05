@@ -201,3 +201,57 @@ func TestUnaryLogsRejectsAnUnknownPort(t *testing.T) {
 		t.Fatal("logs for an unlistened port should fail")
 	}
 }
+
+// test.instant is a streaming method that finishes before it has really
+// started: registered once, from init, because the dispatcher rejects a
+// duplicate and `-count=2` would otherwise panic.
+func init() {
+	daemon.RegisterHandler("test.instant", func(ctx context.Context, req *daemon.Request) (any, error) {
+		return daemon.StartStream(ctx, req, nil, func(context.Context, *daemon.Stream) (any, error) {
+			return map[string]any{"done": true}, nil
+		})
+	})
+}
+
+// TestStreamThatEndsBeforeItsReplyIsDecoded is the race `sonar up` walks into
+// every time it starts a group whose services are all already running: the
+// daemon replies, sends its chunks and ends the stream faster than the client
+// decodes the reply. The client has to hand back the stream those chunks went
+// to, not a fresh empty one that never ends.
+func TestStreamThatEndsBeforeItsReplyIsDecoded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the unix-socket harness does not apply to named pipes")
+	}
+	c := serveTestDaemon(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Ten rounds: the interleaving is a race, and one pass proves little.
+	for i := 0; i < 10; i++ {
+		s, err := c.Stream(ctx, "test.instant", rpc.Empty{}, nil)
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		for range s.Chunks() {
+			// Drained; this method sends none.
+		}
+		select {
+		case end, ok := <-s.End():
+			if !ok {
+				t.Fatalf("round %d: the end channel closed without an end", i)
+			}
+			if end.Err != nil {
+				t.Fatalf("round %d: %v", i, end.Err)
+			}
+			var payload struct {
+				Done bool `json:"done"`
+			}
+			if err := end.Decode(&payload); err != nil || !payload.Done {
+				t.Fatalf("round %d: end payload = %s (%v)", i, end.Data, err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("round %d: the stream never ended", i)
+		}
+		s.Close()
+	}
+}

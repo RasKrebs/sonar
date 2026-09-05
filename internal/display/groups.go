@@ -122,9 +122,38 @@ func RenderGroup(w io.Writer, g state.Group, pp []ports.ListeningPort) {
 		if len(s.DependsOn) > 0 {
 			extra = Dim("  after " + strings.Join(s.DependsOn, ", "))
 		}
-		fmt.Fprintf(w, "  %s  %s  %s%s\n",
-			padRight(s.Name, 16), padRight(want, 5), status, extra)
+		fmt.Fprintf(w, "  %s%s  %s  %s%s\n",
+			serviceIcon(s), padRight(s.Name, 16), padRight(want, 5), status, extra)
+		if meta := serviceMeta(s); meta != "" {
+			fmt.Fprintf(w, "  %s\n", Dim(meta))
+		}
 	}
+}
+
+// serviceIcon prefixes a service with the icon its `.sonar.yaml` gave it.
+// The daemon never interprets the string; the terminal prints whatever the
+// author wrote, which for a one-rune emoji is exactly what they meant.
+func serviceIcon(s state.Service) string {
+	if s.Icon == nil || *s.Icon == "" {
+		return ""
+	}
+	return *s.Icon + " "
+}
+
+// serviceMeta is the description and colour line under a service, printed only
+// when the config actually carries them.
+func serviceMeta(s state.Service) string {
+	var parts []string
+	if s.Description != nil && *s.Description != "" {
+		parts = append(parts, *s.Description)
+	}
+	if s.Color != nil && *s.Color != "" {
+		parts = append(parts, "color "+*s.Color)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  " + strings.Join(parts, "  ")
 }
 
 func portList(members []int) string {

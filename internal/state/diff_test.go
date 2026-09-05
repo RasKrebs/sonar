@@ -84,3 +84,28 @@ func TestDiffCarriesExposuresActive(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+// TestDiffIgnoresHealthLatency keeps a health probe that answers a millisecond
+// faster from publishing a delta: with configured health polled every tick,
+// latency in the comparison would mean a delta on every tick forever.
+func TestDiffIgnoresHealthLatency(t *testing.T) {
+	base := Port{Port: 3000, BindAddress: "127.0.0.1", PID: 10}
+	prev := base
+	prev.Health = &Health{Status: HealthOK, Code: 200, LatencyMs: 3}
+	next := base
+	next.Health = &Health{Status: HealthOK, Code: 200, LatencyMs: 40}
+
+	d := Diff(Snapshot{Ports: []Port{prev}}, Snapshot{Ports: []Port{next}})
+	if len(d.Ports.Updated) != 0 {
+		t.Fatalf("latency-only change published an update: %+v", d.Ports.Updated)
+	}
+
+	next.Health = &Health{Status: HealthFail, Code: 500, LatencyMs: 40}
+	d = Diff(Snapshot{Ports: []Port{prev}}, Snapshot{Ports: []Port{next}})
+	if len(d.Ports.Updated) != 1 {
+		t.Fatalf("a status change must publish an update, got %+v", d.Ports)
+	}
+	if d.Ports.Updated[0].Health.LatencyMs != 40 {
+		t.Fatalf("the published row must carry the newest latency, got %+v", d.Ports.Updated[0].Health)
+	}
+}

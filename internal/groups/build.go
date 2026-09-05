@@ -67,29 +67,56 @@ func Groups(pp []state.Port, index *Index) []state.Group {
 	return out
 }
 
+// ServiceRow adapts one `.sonar.yaml` service to the published contract row,
+// without any knowledge of what is running. `groups.config.get` returns the
+// file through it, so what the editor reads back is exactly what the resolver
+// publishes.
+func ServiceRow(s Service) state.Service {
+	svc := state.Service{
+		Name:      s.Name,
+		Cmd:       s.Cmd,
+		Cwd:       s.Cwd,
+		DependsOn: append([]string{}, s.DependsOn...),
+	}
+	if svc.DependsOn == nil {
+		svc.DependsOn = []string{}
+	}
+	if s.Port != 0 {
+		port := s.Port
+		svc.Port = &port
+	}
+	svc.Health = optional(s.Health)
+	svc.Description = optional(s.Description)
+	svc.Icon = optional(s.Icon)
+	svc.Color = optional(s.Color)
+	return svc
+}
+
+// ServiceRows adapts a whole config's services list.
+func ServiceRows(cfg *Config) []state.Service {
+	out := make([]state.Service, 0, len(cfg.Services))
+	for _, s := range cfg.Services {
+		out = append(out, ServiceRow(s))
+	}
+	return out
+}
+
+// optional turns an empty metadata string into the contract's null.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	v := s
+	return &v
+}
+
 // services joins a config's declared services against the ports actually
 // listening in that group: by declared port first, then by the name the
 // scanner shows for the port.
 func services(cfg *Config, member []state.Port) []state.Service {
 	out := make([]state.Service, 0, len(cfg.Services))
 	for _, s := range cfg.Services {
-		svc := state.Service{
-			Name:      s.Name,
-			Cmd:       s.Cmd,
-			Cwd:       s.Cwd,
-			DependsOn: append([]string{}, s.DependsOn...),
-		}
-		if svc.DependsOn == nil {
-			svc.DependsOn = []string{}
-		}
-		if s.Port != 0 {
-			port := s.Port
-			svc.Port = &port
-		}
-		if s.Health != "" {
-			health := s.Health
-			svc.Health = &health
-		}
+		svc := ServiceRow(s)
 		for _, p := range member {
 			if (s.Port != 0 && p.Port == s.Port) || p.DisplayName == s.Name ||
 				(p.Run != nil && p.Run.Name == s.Name) {

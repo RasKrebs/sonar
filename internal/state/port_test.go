@@ -39,3 +39,29 @@ func TestPortJSONNullsForAbsentOptionals(t *testing.T) {
 		t.Fatalf("type = %v", m["type"])
 	}
 }
+
+// TestNormalizeHealth pins the one published vocabulary: the desktop branches
+// on ok/fail/unknown and nothing else, while the probe's own word survives as
+// the reason (step 1A.7).
+func TestNormalizeHealth(t *testing.T) {
+	cases := []struct {
+		raw          string
+		want, reason string
+	}{
+		{"healthy", HealthOK, "healthy"},
+		{"ok", HealthOK, "ok"},
+		{"unhealthy", HealthFail, "unhealthy"},
+		{"refused", HealthFail, "refused"},
+		{"timeout", HealthFail, "timeout"},
+		{"non-http", HealthFail, "non-http"},
+		{"fail", HealthFail, ""},
+		{"unknown", HealthUnknown, ""},
+		{"", HealthUnknown, ""},
+	}
+	for _, c := range cases {
+		got, reason := NormalizeHealth(c.raw)
+		if got != c.want || reason != c.reason {
+			t.Errorf("NormalizeHealth(%q) = %q, %q; want %q, %q", c.raw, got, reason, c.want, c.reason)
+		}
+	}
+}
