@@ -159,7 +159,7 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		hint = *p.PortHint
 	}
 
-	h, err := spawn.Spawn(ctx, spawn.Request{
+	h, err := Spawn(ctx, req.Runtime, spawn.Request{
 		Argv:     p.Argv,
 		Cwd:      cwd,
 		Env:      mergeEnv(p.Env),
@@ -168,6 +168,30 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		PortHint: hint,
 		Detach:   true,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	return rpc.RunsSpawnResult{
+		// A run has no ports yet at the moment it starts, so `affected` is
+		// empty; the ports arrive in the next state.delta.
+		MutationResult: rpc.MutationResult{OK: true, Affected: []string{}},
+		RunID:          h.ID,
+		PID:            h.PID,
+		LogPath:        h.LogPath,
+	}, nil
+}
+
+// Spawn starts a detached run, registers it and reaps it. It is the one spawn
+// path the daemon has: `runs.spawn` calls it for a single command and
+// `groups.start` calls it once per service, so a service started from the
+// desktop is attributed exactly like one started from the CLI (contract §4).
+//
+// The caller has already resolved the group, the name and the working
+// directory; CheckCwd is the home-directory guard.
+func Spawn(ctx context.Context, rt *daemon.Runtime, req spawn.Request) (*spawn.Handle, error) {
+	req.Detach = true
+	h, err := spawn.Spawn(ctx, req)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, err.Error(),
 			"check the command and its working directory")
@@ -184,9 +208,9 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		PortHint:  h.PortHint,
 		StartedAt: h.StartedAt,
 	})
-	req.Runtime.Logger.Info("spawned a run",
+	rt.Logger.Info("spawned a run",
 		"id", h.ID, "pid", h.PID, "group", h.Group, "name", h.Name, "log", h.LogPath)
-	req.Runtime.Scanner.Wake()
+	rt.Scanner.Wake()
 
 	// Reap it: an unwaited child stays a zombie, and a zombie pid still looks
 	// alive to every liveness test, so the run would never be pruned.
@@ -195,16 +219,14 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		Default.Unregister(h.PID)
 		rt.Logger.Info("run exited", "id", h.ID, "pid", h.PID, "code", code, "error", err)
 		rt.Scanner.Wake()
-	}(req.Runtime, h)
+	}(rt, h)
+	return h, nil
+}
 
-	return rpc.RunsSpawnResult{
-		// A run has no ports yet at the moment it starts, so `affected` is
-		// empty; the ports arrive in the next state.delta.
-		MutationResult: rpc.MutationResult{OK: true, Affected: []string{}},
-		RunID:          h.ID,
-		PID:            h.PID,
-		LogPath:        h.LogPath,
-	}, nil
+// CheckCwd cleans a working directory and enforces the home-directory rule.
+// `groups.start` reuses it so one place decides what the daemon may run.
+func CheckCwd(cwd string, allowOutsideHome bool) (string, error) {
+	return checkCwd(cwd, allowOutsideHome)
 }
 
 // row renders one run for `runs.list`, including the ports it currently holds
