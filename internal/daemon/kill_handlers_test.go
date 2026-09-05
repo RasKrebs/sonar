@@ -7,6 +7,8 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/killer"
+	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/scanner"
 	"github.com/raskrebs/sonar/internal/state"
 )
 
@@ -227,4 +229,59 @@ func freeTestPort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// TestKillRepublishesSoTheNextReadIsFresh: a kill drops the cached scan, so the
+// caller's own next `sonar list` does not still show the port it just freed,
+// and the port_down row reaches the history ring with nobody subscribed
+// (step 1A.7).
+func TestKillRepublishesSoTheNextReadIsFresh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	c := h.dial(ctx)
+
+	h.setRows(ports.ListeningPort{Port: 4321, BindAddress: "127.0.0.1", PID: 999, Process: "node"})
+	if _, err := h.loop.Snapshot(scanner.Include{}); err != nil {
+		t.Fatalf("priming: %v", err)
+	}
+	before := h.loop.Status().Scans
+
+	// The kill itself fails (there is no pid 999), which is beside the point:
+	// the handler still has to leave the cache invalidated.
+	h.setRows()
+	var env rpc.KillEnvelope
+	if e := c.call("ports.kill", rpc.PortsKillParams{Targets: []rpc.Selector{{Port: ptr(4321)}}}, &env); e != nil {
+		t.Fatalf("ports.kill: %v", e)
+	}
+	if after := h.loop.Status().Scans; after <= before {
+		t.Fatalf("scans = %d, want a rescan after the kill (was %d)", after, before)
+	}
+	if snap := h.loop.Cached(); len(snap.Ports) != 0 {
+		t.Errorf("the cached snapshot still carries %d ports after the kill", len(snap.Ports))
+	}
+}
+
+// TestDryRunKillDoesNotRescan: nothing changed, so nothing needs republishing.
+func TestDryRunKillDoesNotRescan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	c := h.dial(ctx)
+
+	h.setRows(ports.ListeningPort{Port: 4322, BindAddress: "127.0.0.1", PID: 998, Process: "node"})
+	if _, err := h.loop.Snapshot(scanner.Include{}); err != nil {
+		t.Fatalf("priming: %v", err)
+	}
+	before := h.loop.Status().Scans
+
+	var env rpc.KillEnvelope
+	if e := c.call("ports.kill", rpc.PortsKillParams{
+		Targets: []rpc.Selector{{Port: ptr(4322)}}, DryRun: true,
+	}, &env); e != nil {
+		t.Fatalf("ports.kill: %v", e)
+	}
+	if after := h.loop.Status().Scans; after != before {
+		t.Errorf("a dry run rescanned: %d -> %d", before, after)
+	}
 }
