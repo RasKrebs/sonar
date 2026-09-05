@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/raskrebs/sonar/internal/display"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/killer"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
@@ -298,5 +301,43 @@ func TestPositionalTargetReadsAPortFirst(t *testing.T) {
 	// Out of port range: it can only be a pid.
 	if got := positionalTarget(70000, snapshot, ""); got.PID != 70000 || got.Port != 0 {
 		t.Errorf("70000 = %+v, want a pid target", got)
+	}
+}
+
+// A `.sonar.yaml` group only exists after groups.Attribute has run over the
+// scan, so `sonar kill -g` misses it unless the kill path enriches the same way
+// `sonar list` does. This pins the composition the scan path relies on.
+func TestKillTargetsSeeAFileGroup(t *testing.T) {
+	// The index resolves symlinks; on macOS t.TempDir() is one, so compare
+	// like for like.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, groups.ConfigName),
+		[]byte("name: checkout\nports:\n  - 4000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := []ports.ListeningPort{
+		{Port: 4000, PID: 400, BindAddress: "127.0.0.1", Process: "node", Cwd: dir},
+	}
+	if got := snapshot[0].Group; got != "" {
+		t.Fatalf("group = %q before attribution, want it empty", got)
+	}
+	groups.Attribute(snapshot)
+	if got := snapshot[0].Group; got != "checkout" {
+		t.Fatalf("group = %q after attribution, want checkout", got)
+	}
+
+	resetKillFlags(t)
+	killGroupFlag = "checkout"
+	targets, _, err := killTargets(nil, snapshot, "")
+	if err != nil {
+		t.Fatalf("kill -g checkout: %v", err)
+	}
+	want := killer.Target{Port: 4000, BindAddress: "127.0.0.1"}
+	if len(targets) != 1 || targets[0] != want {
+		t.Fatalf("targets = %+v, want %+v", targets, want)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/docker"
+	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/killer"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
@@ -124,7 +125,9 @@ func killRun(ctx context.Context, targets []killer.Target, snapshot []ports.List
 }
 
 // scanForKill takes the enriched scan every selector is resolved against, and
-// which the killer reuses instead of scanning a second time.
+// which the killer reuses instead of scanning a second time. Group attribution
+// is part of that enrichment: without it `-g` would only ever see a Compose
+// project or a run tag, never a `.sonar.yaml` name or a git root.
 func scanForKill() []ports.ListeningPort {
 	found, err := ports.Scan()
 	if err != nil {
@@ -132,6 +135,7 @@ func scanForKill() []ports.ListeningPort {
 	}
 	docker.EnrichPorts(found)
 	ports.Enrich(found)
+	groups.Attribute(found)
 	return found
 }
 
