@@ -60,7 +60,7 @@ var startCmd = &cobra.Command{
 func init() {
 	startCmd.Flags().StringVar(&startGroup, "group", "", "Group to attribute this run to (default: .sonar.yaml, git root, or directory name)")
 	startCmd.Flags().StringVar(&startName, "name", "", "Service name for this run (default: inferred from the command)")
-	startCmd.Flags().IntVar(&startPort, "port", 0, "Port this command is expected to bind; shown as `starting` until it does")
+	startCmd.Flags().IntVar(&startPort, "port", 0, "Port this command is expected to bind; the run shows as starting until it does")
 	startCmd.Flags().BoolVar(&startDetach, "detach", false, "Run in the background, logging to ~/.config/sonar/logs/<group>/<name>.log")
 	startCmd.Flags().BoolVar(&startList, "list", false, "List the runs sonar started and exit")
 	startCmd.Flags().BoolVar(&startJSON, "json", false, "Output as JSON (with --list)")
