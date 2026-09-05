@@ -75,7 +75,14 @@ Examples:
 
 		if c := daemonClient(cmd.Context()); c != nil {
 			defer c.Close()
-			return waitThroughDaemon(cmd.Context(), c, portList, sigCh)
+			code, err := waitThroughDaemon(cmd.Context(), c, portList, sigCh)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				os.Exit(code)
+			}
+			return nil
 		}
 
 		deadline := time.After(waitTimeoutFlag)
@@ -131,9 +138,11 @@ Examples:
 }
 
 // waitThroughDaemon runs the wait as a stream: the daemon does the probing and
-// pushes one chunk per port that comes up, so the printed lines, the exit codes
-// and the interrupt behaviour are the same as the local loop's.
-func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, sigCh <-chan os.Signal) error {
+// pushes one chunk per port that comes up, so the printed lines and the
+// interrupt behaviour are the same as the local loop's. It returns the process
+// exit code the command should use — 0 ready, 1 timed out, 2 interrupted — so
+// the decision is testable without spawning a process.
+func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, sigCh <-chan os.Signal) (int, error) {
 	s, err := c.Stream(ctx, "ports.wait", rpc.PortsWaitParams{
 		Ports:      portList,
 		HTTP:       strPtrOrNil(waitHTTPFlag),
@@ -141,7 +150,7 @@ func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, si
 		IntervalMs: int(waitIntervalFlag / time.Millisecond),
 	}, nil)
 	if err != nil {
-		return cliError(err)
+		return 0, cliError(err)
 	}
 	defer s.Close()
 
@@ -154,7 +163,7 @@ func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, si
 				fmt.Println()
 				fmt.Fprintf(os.Stderr, "%s Interrupted\n", display.Red("✗"))
 			}
-			os.Exit(2)
+			return 2, nil
 		case raw, ok := <-chunks:
 			if !ok {
 				chunks = nil
@@ -169,23 +178,23 @@ func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, si
 			}
 		case end := <-s.End():
 			if end.Err != nil {
-				return cliError(end.Err)
+				return 0, cliError(end.Err)
 			}
 			var final rpc.PortsWaitEnd
 			if err := end.Decode(&final); err != nil {
-				return err
+				return 0, err
 			}
 			if len(final.TimedOut) > 0 {
 				if !waitQuietFlag {
 					fmt.Fprintf(os.Stderr, "%s Timeout waiting for port(s) %v\n",
 						display.Red("✗"), final.TimedOut)
 				}
-				os.Exit(1)
+				return 1, nil
 			}
 			if !waitQuietFlag {
 				fmt.Printf("%s All ports ready\n", display.Green("✔"))
 			}
-			return nil
+			return 0, nil
 		}
 	}
 }
