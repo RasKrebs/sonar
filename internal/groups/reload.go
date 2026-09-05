@@ -81,31 +81,16 @@ func (x *Index) Named(name string) (*Config, bool) {
 // scanner walked to while a client sends whatever the user typed — on macOS
 // that is /var/… against /private/var/….
 func (x *Index) ByPath(path string) (*Config, bool) {
-	for _, candidate := range pathForms(path) {
-		for _, cfg := range x.configs {
-			if cfg != nil && cfg.Path == candidate {
-				return cfg, true
-			}
+	want := Canonical(path)
+	if want == "" {
+		return nil, false
+	}
+	for _, cfg := range x.configs {
+		if cfg != nil && cfg.Path == want {
+			return cfg, true
 		}
 	}
 	return nil, false
-}
-
-// pathForms is a path as given and with its symlinks resolved.
-func pathForms(path string) []string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = path
-	}
-	out := []string{filepath.Clean(abs)}
-	// EvalSymlinks needs the file to exist; resolving the directory works even
-	// for a config that was just deleted.
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		if resolved := filepath.Join(dir, filepath.Base(abs)); resolved != out[0] {
-			out = append(out, resolved)
-		}
-	}
-	return out
 }
 
 // Reload re-reads every config the index knows plus every directory in roots,
@@ -130,11 +115,11 @@ func (x *Index) Reload(roots []string) (int, []InvalidConfig) {
 		if root == "" {
 			continue
 		}
-		abs, err := filepath.Abs(root)
-		if err != nil {
-			continue
+		// Roots come back from the store as the user typed them; the index
+		// is keyed canonically.
+		if abs := Canonical(root); abs != "" {
+			dirs[abs] = true
 		}
-		dirs[abs] = true
 	}
 
 	for dir := range dirs {

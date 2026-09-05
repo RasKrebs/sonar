@@ -93,7 +93,8 @@ func TestReloadReportsInvalidFiles(t *testing.T) {
 	if loaded != 0 || len(bad) != 1 {
 		t.Fatalf("reload = %d, %v", loaded, bad)
 	}
-	if bad[0].Path != filepath.Join(dir, ConfigName) {
+	// Paths are reported canonically: the index normalises once on the way in.
+	if bad[0].Path != Canonical(filepath.Join(dir, ConfigName)) {
 		t.Errorf("error names %s", bad[0].Path)
 	}
 

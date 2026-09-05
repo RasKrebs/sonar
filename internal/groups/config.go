@@ -60,9 +60,12 @@ func (e *ConfigError) Error() string {
 // *ConfigError listing every validation problem; callers report it and carry
 // on, because an invalid config must never be fatal to a scan.
 func Load(path string) (*Config, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
+	// Canonical once, here: Path and Dir are the keys the index is built on,
+	// so a config read through a symlinked path must land under the same key
+	// as the same config found by walking a process's cwd.
+	abs := Canonical(path)
+	if abs == "" {
+		return nil, fmt.Errorf("no config path given")
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {

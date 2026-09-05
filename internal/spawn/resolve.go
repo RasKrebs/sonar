@@ -27,9 +27,12 @@ func Resolve(cwd string, argv []string, groupFlag, nameFlag string) Resolution {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	if abs, err := filepath.Abs(cwd); err == nil {
-		cwd = abs
-	}
+	// One normalisation for the whole chain: the index, the git-root walk and
+	// the directory-name fallback all have to see the same spelling of this
+	// directory, or a cwd reached through a symlink (macOS $TMPDIR, /var vs
+	// /private/var) resolves to a different group than the same directory
+	// reached directly.
+	cwd = groups.Canonical(cwd)
 
 	index := groups.NewIndex()
 	index.Observe(cwd)
@@ -81,29 +84,12 @@ func matchService(cfg *groups.Config, cwd string, argv []string) (string, bool) 
 		if strings.Join(splitCmd(svc.Cmd), "\x00") != want {
 			continue
 		}
-		if svc.Cwd != "" && !sameDir(cfg.ServiceDir(svc), cwd) {
+		if svc.Cwd != "" && groups.Canonical(cfg.ServiceDir(svc)) != cwd {
 			continue
 		}
 		return svc.Name, true
 	}
 	return "", false
-}
-
-// sameDir compares two directories after cleaning and resolving symlinks, so
-// /tmp and /private/tmp on macOS are one directory.
-func sameDir(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, err := filepath.EvalSymlinks(a)
-	if err != nil {
-		ra = filepath.Clean(a)
-	}
-	rb, err := filepath.EvalSymlinks(b)
-	if err != nil {
-		rb = filepath.Clean(b)
-	}
-	return ra == rb
 }
 
 // SplitCmd turns a `.sonar.yaml` `cmd:` string into argv with shell-style

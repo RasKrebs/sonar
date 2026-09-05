@@ -123,3 +123,46 @@ func TestResolveWorktreeGroupName(t *testing.T) {
 		t.Fatalf("worktree group = %q, want sonar@feature", got.Group)
 	}
 }
+
+// TestResolveThroughASymlinkedCwd is the macOS $TMPDIR case (/var is a symlink
+// to /private/var): a run started in a directory reached through a symlink must
+// land in the same group as one started in the directory itself, and the group
+// must come from the `.sonar.yaml`, not from the name of the link.
+func TestResolveThroughASymlinkedCwd(t *testing.T) {
+	real := tempRepo(t, "proj", map[string]string{
+		".git":        "",
+		".sonar.yaml": "name: my-app\n",
+	})
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	direct := Resolve(real, []string{"npm", "run", "dev"}, "", "")
+	if direct.Group != "my-app" {
+		t.Fatalf("direct group = %q, want my-app", direct.Group)
+	}
+
+	via := Resolve(link, []string{"npm", "run", "dev"}, "", "")
+	if via.Group != "my-app" {
+		t.Fatalf("group through the symlink = %q, want my-app", via.Group)
+	}
+	if via.ConfigPath != direct.ConfigPath {
+		t.Fatalf("config path through the symlink = %q, want %q", via.ConfigPath, direct.ConfigPath)
+	}
+}
+
+// TestResolveNamesTheRealDirectoryNotTheLink: with no config and no checkout
+// the group is the directory name, and that is the directory the link points
+// at, not the link.
+func TestResolveNamesTheRealDirectoryNotTheLink(t *testing.T) {
+	real := tempRepo(t, "checkout", nil)
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if got := Resolve(link, []string{"npm", "run", "dev"}, "", "").Group; got != "checkout" {
+		t.Fatalf("group = %q, want checkout", got)
+	}
+}

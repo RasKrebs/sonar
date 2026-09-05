@@ -1,6 +1,7 @@
 package groups
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,4 +106,53 @@ func TestIndexAcceptsTheYmlSpelling(t *testing.T) {
 	if cfg := x.At(repo); cfg == nil || cfg.Name != "ymlrepo" {
 		t.Fatalf("At = %+v", cfg)
 	}
+}
+
+// TestIndexKeysConfigsCanonically: a config reached through an unresolved path
+// — a Reload root the store handed back, or a path a client typed — has to land
+// under the same key as the same directory found by walking a process cwd. On
+// macOS those two spellings differ for everything under $TMPDIR (/var against
+// /private/var), and a mismatch makes the config invisible to Nearest, so
+// `sonar start` falls back to the git root or the directory name.
+func TestIndexKeysConfigsCanonically(t *testing.T) {
+	real := tempTree(t)
+	repo := mkdir(t, real, "repo")
+	writeFile(t, filepath.Join(repo, ConfigName), "name: my-app\n")
+
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	viaLink := filepath.Join(link, "repo")
+
+	t.Run("AddFile", func(t *testing.T) {
+		x := NewIndex()
+		if err := x.AddFile(filepath.Join(viaLink, ConfigName)); err != nil {
+			t.Fatal(err)
+		}
+		if cfg := x.Nearest(repo); cfg == nil || cfg.Name != "my-app" {
+			t.Fatalf("Nearest(%s) = %+v after AddFile through a symlink", repo, cfg)
+		}
+		if cfg := x.At(viaLink); cfg == nil || cfg.Name != "my-app" {
+			t.Fatalf("At(%s) = %+v", viaLink, cfg)
+		}
+	})
+
+	t.Run("Reload", func(t *testing.T) {
+		x := NewIndex()
+		if n, bad := x.Reload([]string{viaLink}); n != 1 || len(bad) != 0 {
+			t.Fatalf("Reload = %d, %v", n, bad)
+		}
+		if cfg := x.Nearest(filepath.Join(repo, "sub", "dir")); cfg == nil || cfg.Name != "my-app" {
+			t.Fatalf("Nearest below the repo = %+v after Reload through a symlink", cfg)
+		}
+	})
+
+	t.Run("ByPath", func(t *testing.T) {
+		x := NewIndex()
+		x.Observe(repo)
+		if cfg, ok := x.ByPath(filepath.Join(viaLink, ConfigName)); !ok || cfg.Name != "my-app" {
+			t.Fatalf("ByPath through a symlink = %+v, %v", cfg, ok)
+		}
+	})
 }

@@ -59,8 +59,8 @@ func (x *Index) Add(cfg *Config) {
 func (x *Index) AddFile(path string) error {
 	cfg, err := Load(path)
 	if err != nil {
-		abs, absErr := filepath.Abs(path)
-		if absErr != nil {
+		abs := Canonical(path)
+		if abs == "" {
 			abs = path
 		}
 		x.invalid[abs] = err
@@ -82,13 +82,7 @@ func (x *Index) Observe(dir string) {
 	if dir == "" {
 		return
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
+	abs := Canonical(dir)
 	root, _, hasRoot := Find(abs)
 	cur := abs
 	for i := 0; i < maxWalk; i++ {
@@ -143,7 +137,7 @@ func (x *Index) At(dir string) *Config {
 	if dir == "" {
 		return nil
 	}
-	return x.configs[dir]
+	return x.configs[Canonical(dir)]
 }
 
 // Nearest returns the config in dir or the closest ancestor of it, or nil.
@@ -151,13 +145,10 @@ func (x *Index) Nearest(dir string) *Config {
 	if dir == "" {
 		return nil
 	}
-	// Configs are keyed by the directory Observe resolved, so a caller passing
-	// the unresolved path (/var/… against /private/var/… on macOS) has to be
-	// resolved the same way or nothing matches.
-	cur := filepath.Clean(dir)
-	if real, err := filepath.EvalSymlinks(cur); err == nil {
-		cur = real
-	}
+	// Configs are keyed by the canonical directory, so a caller passing the
+	// unresolved path (/var/… against /private/var/… on macOS) has to be
+	// normalised the same way or nothing matches.
+	cur := Canonical(dir)
 	for i := 0; i < maxWalk; i++ {
 		if cfg, ok := x.configs[cur]; ok {
 			return cfg
@@ -228,7 +219,7 @@ func under(path, dir string) bool {
 	if path == "" || dir == "" {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	rel, err := filepath.Rel(Canonical(dir), Canonical(path))
 	if err != nil {
 		return false
 	}

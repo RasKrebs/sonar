@@ -29,12 +29,9 @@ func Find(cwd string) (root, worktree string, ok bool) {
 	if cwd == "" {
 		return "", "", false
 	}
-	dir, err := filepath.Abs(cwd)
-	if err != nil {
+	dir := Canonical(cwd)
+	if dir == "" {
 		return "", "", false
-	}
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = resolved
 	}
 	for i := 0; i < maxWalk; i++ {
 		gitPath := filepath.Join(dir, ".git")
