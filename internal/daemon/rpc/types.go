@@ -74,11 +74,14 @@ type StreamChunk struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// StreamEnd is the payload of a stream.end notification. Error is set when the
+// StreamEnd is the payload of a stream.end notification. Data carries the
+// method's final result (ports.wait's {ready, timed_out}, for example) and is
+// absent for streams that have nothing to say at the end. Error is set when the
 // stream ended because of a failure.
 type StreamEnd struct {
-	ID    string `json:"id"`
-	Error *Error `json:"error,omitempty"`
+	ID    string          `json:"id"`
+	Data  json.RawMessage `json:"data,omitempty"`
+	Error *Error          `json:"error,omitempty"`
 }
 
 // StreamCancel is the params of a stream.cancel call.

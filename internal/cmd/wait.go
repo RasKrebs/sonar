@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -8,6 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/raskrebs/sonar/internal/daemon/client"
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/spf13/cobra"
@@ -69,6 +73,18 @@ Examples:
 				display.Dim("⏳"), label, portList, waitTimeoutFlag)
 		}
 
+		if c := daemonClient(cmd.Context()); c != nil {
+			defer c.Close()
+			code, err := waitThroughDaemon(cmd.Context(), c, portList, sigCh)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				os.Exit(code)
+			}
+			return nil
+		}
+
 		deadline := time.After(waitTimeoutFlag)
 		ticker := time.NewTicker(waitIntervalFlag)
 		defer ticker.Stop()
@@ -119,6 +135,68 @@ Examples:
 			}
 		}
 	},
+}
+
+// waitThroughDaemon runs the wait as a stream: the daemon does the probing and
+// pushes one chunk per port that comes up, so the printed lines and the
+// interrupt behaviour are the same as the local loop's. It returns the process
+// exit code the command should use — 0 ready, 1 timed out, 2 interrupted — so
+// the decision is testable without spawning a process.
+func waitThroughDaemon(ctx context.Context, c *client.Client, portList []int, sigCh <-chan os.Signal) (int, error) {
+	s, err := c.Stream(ctx, "ports.wait", rpc.PortsWaitParams{
+		Ports:      portList,
+		HTTP:       strPtrOrNil(waitHTTPFlag),
+		TimeoutMs:  int(waitTimeoutFlag / time.Millisecond),
+		IntervalMs: int(waitIntervalFlag / time.Millisecond),
+	}, nil)
+	if err != nil {
+		return 0, cliError(err)
+	}
+	defer s.Close()
+
+	chunks := s.Chunks()
+	for {
+		select {
+		case <-sigCh:
+			_ = s.Cancel(ctx)
+			if !waitQuietFlag {
+				fmt.Println()
+				fmt.Fprintf(os.Stderr, "%s Interrupted\n", display.Red("✗"))
+			}
+			return 2, nil
+		case raw, ok := <-chunks:
+			if !ok {
+				chunks = nil
+				continue
+			}
+			var chunk rpc.PortsWaitChunk
+			if err := json.Unmarshal(raw, &chunk); err != nil {
+				continue
+			}
+			if !waitQuietFlag {
+				fmt.Printf("  %s port %d ready\n", display.Green("✓"), chunk.Port)
+			}
+		case end := <-s.End():
+			if end.Err != nil {
+				return 0, cliError(end.Err)
+			}
+			var final rpc.PortsWaitEnd
+			if err := end.Decode(&final); err != nil {
+				return 0, err
+			}
+			if len(final.TimedOut) > 0 {
+				if !waitQuietFlag {
+					fmt.Fprintf(os.Stderr, "%s Timeout waiting for port(s) %v\n",
+						display.Red("✗"), final.TimedOut)
+				}
+				return 1, nil
+			}
+			if !waitQuietFlag {
+				fmt.Printf("%s All ports ready\n", display.Green("✔"))
+			}
+			return 0, nil
+		}
+	}
 }
 
 // isPortReady checks whether a port is ready via TCP or HTTP.

@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/spf13/cobra"
@@ -29,25 +31,10 @@ func init() {
 }
 
 func graphRun(cmd *cobra.Command, args []string) error {
-	results, err := ports.Scan()
+	connections, err := graphConnections(cmd.Context())
 	if err != nil {
 		return err
 	}
-
-	docker.EnrichPorts(results)
-	ports.Enrich(results)
-
-	connections, err := ports.BuildGraph(results)
-	if err != nil {
-		return err
-	}
-
-	// Add Docker inter-container connections
-	dockerConns, err := docker.BuildDockerGraph(results)
-	if err != nil {
-		return err
-	}
-	connections = append(connections, dockerConns...)
 
 	if len(connections) == 0 {
 		fmt.Println("No inter-service connections detected.")
@@ -63,6 +50,46 @@ func graphRun(cmd *cobra.Command, args []string) error {
 	}
 
 	return renderGraphASCII(connections)
+}
+
+// graphConnections asks the daemon for the connection graph, so two clients
+// looking at the same machine share one `lsof` pass, and falls back to running
+// it here when no daemon is reachable.
+func graphConnections(ctx context.Context) ([]ports.Connection, error) {
+	if c := daemonClient(ctx); c != nil {
+		defer c.Close()
+		var res rpc.PortsGraphResult
+		if err := c.Call(ctx, "ports.graph", rpc.Empty{}, &res); err != nil {
+			return nil, err
+		}
+		out := make([]ports.Connection, 0, len(res.Connections))
+		for _, e := range res.Connections {
+			out = append(out, ports.Connection{
+				FromPort:    e.FromPort,
+				FromProcess: e.FromProcess,
+				ToPort:      e.ToPort,
+				ToProcess:   e.ToProcess,
+			})
+		}
+		return out, nil
+	}
+
+	results, err := ports.Scan()
+	if err != nil {
+		return nil, err
+	}
+	docker.EnrichPorts(results)
+	ports.Enrich(results)
+
+	connections, err := ports.BuildGraph(results)
+	if err != nil {
+		return nil, err
+	}
+	dockerConns, err := docker.BuildDockerGraph(results)
+	if err != nil {
+		return nil, err
+	}
+	return append(connections, dockerConns...), nil
 }
 
 func renderGraphASCII(connections []ports.Connection) error {

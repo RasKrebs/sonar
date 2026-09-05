@@ -84,6 +84,7 @@ func handleStatus(_ context.Context, req *Request) (any, error) {
 		Subscribers:    rt.Subscribers(),
 		LastScanAt:     lastScan,
 		ScanIntervalMs: st.IntervalMs,
+		Scans:          st.Scans,
 		DBPath:         rt.DBPath(),
 	}, nil
 }

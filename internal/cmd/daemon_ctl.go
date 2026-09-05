@@ -118,6 +118,7 @@ func daemonStatusRun(cmd *cobra.Command, _ []string) error {
 			"subscribers":      status.Subscribers,
 			"last_scan_at":     status.LastScanAt,
 			"scan_interval_ms": status.ScanIntervalMs,
+			"scans":            status.Scans,
 			"db_path":          status.DBPath,
 			"socket":           hello.Socket,
 			"daemon_version":   hello.DaemonVersion,
@@ -137,6 +138,7 @@ func daemonStatusRun(cmd *cobra.Command, _ []string) error {
 	fmt.Printf("uptime        %s\n", status.Uptime)
 	fmt.Printf("subscribers   %d\n", status.Subscribers)
 	fmt.Printf("scan interval %dms\n", status.ScanIntervalMs)
+	fmt.Printf("scans         %d\n", status.Scans)
 	if status.LastScanAt != "" {
 		fmt.Printf("last scan     %s\n", status.LastScanAt)
 	}

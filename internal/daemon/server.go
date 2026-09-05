@@ -28,7 +28,8 @@ const idleCheckInterval = 5 * time.Second
 // from daemon.hello to tell whether, say, expose.* exists before calling it.
 // Later steps append their own family as they land.
 func Capabilities() []string {
-	return append([]string{"state", "ports.read", "ports.kill", "store"}, registeredCapabilities()...)
+	return append([]string{"state", "ports.read", "ports.kill", "store", "streams"},
+		registeredCapabilities()...)
 }
 
 // Options configures a Server.

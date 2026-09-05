@@ -1,19 +1,22 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/spf13/cobra"
 )
 
 var (
 	nextConsecutiveFlag int
-	nextJSONFlag  bool
+	nextJSONFlag        bool
 )
 
 var nextCmd = &cobra.Command{
@@ -76,22 +79,9 @@ func nextRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--consecutive must be at least 1")
 	}
 
-	results, err := ports.Scan()
+	freePorts, err := nextFreePorts(cmd.Context(), startPort, endPort, nextConsecutiveFlag)
 	if err != nil {
 		return err
-	}
-
-	occupied := make(map[int]bool, len(results))
-	for _, r := range results {
-		occupied[r.Port] = true
-	}
-
-	freePorts := findFreePorts(occupied, startPort, endPort, nextConsecutiveFlag)
-	if len(freePorts) < nextConsecutiveFlag {
-		if endPort < 65535 {
-			return fmt.Errorf("no %d consecutive free port(s) in range %d-%d", nextConsecutiveFlag, startPort, endPort)
-		}
-		return fmt.Errorf("no %d consecutive free port(s) starting from %d", nextConsecutiveFlag, startPort)
 	}
 
 	if nextJSONFlag {
@@ -106,6 +96,48 @@ func nextRun(cmd *cobra.Command, args []string) error {
 		fmt.Println(p)
 	}
 	return nil
+}
+
+// nextFreePorts asks the daemon, which answers from the shared scan, and falls
+// back to scanning here when no daemon is reachable.
+func nextFreePorts(ctx context.Context, start, end, count int) ([]int, error) {
+	exhausted := func() error {
+		if end < 65535 {
+			return fmt.Errorf("no %d consecutive free port(s) in range %d-%d", count, start, end)
+		}
+		return fmt.Errorf("no %d consecutive free port(s) starting from %d", count, start)
+	}
+
+	if c := daemonClient(ctx); c != nil {
+		defer c.Close()
+		var res rpc.PortsNextResult
+		err := c.Call(ctx, "ports.next", rpc.PortsNextParams{
+			Start: start, End: end, Count: count,
+		}, &res)
+		var re *rpc.Error
+		switch {
+		case err == nil:
+			return res.Ports, nil
+		case errors.As(err, &re) && re.Code == rpc.CodeNotFound:
+			return nil, exhausted()
+		default:
+			return nil, err
+		}
+	}
+
+	results, err := ports.Scan()
+	if err != nil {
+		return nil, err
+	}
+	occupied := make(map[int]bool, len(results))
+	for _, r := range results {
+		occupied[r.Port] = true
+	}
+	free := findFreePorts(occupied, start, end, count)
+	if len(free) < count {
+		return nil, exhausted()
+	}
+	return free, nil
 }
 
 // findFreePorts finds count consecutive free ports in [start, end].
