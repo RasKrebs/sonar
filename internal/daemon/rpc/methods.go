@@ -32,21 +32,13 @@ type MutationResult struct {
 	Affected []string `json:"affected"`
 }
 
-// KillTargetResult is one row of a kill-shaped result.
-type KillTargetResult struct {
-	Port        int    `json:"port"`
-	BindAddress string `json:"bind_address"`
-	PID         int    `json:"pid"`
-	Name        string `json:"name"`
-	Method      string `json:"method"` // signal | docker_stop | map_stop | none
-	OK          bool   `json:"ok"`
-	Error       string `json:"error,omitempty"`
-}
-
-// KillResult is the result of every kill-shaped method (contract §3).
-type KillResult struct {
+// KillEnvelope is the result of every kill-shaped method (contract §3). The row
+// type is state.KillResult, the single Go type the killer, the CLI and the
+// daemon all produce, so it keeps the plain name in the generated schema
+// (contract §17) and the envelope around it is named for what it is.
+type KillEnvelope struct {
 	MutationResult
-	Results []KillTargetResult `json:"results"`
+	Results []state.KillResult `json:"results"`
 }
 
 // Empty is the params or result of a method that takes or returns nothing.

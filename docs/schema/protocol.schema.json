@@ -1254,7 +1254,7 @@
       },
       "type": "array"
     },
-    "KillResult": {
+    "KillEnvelope": {
       "properties": {
         "ok": {
           "type": "boolean"
@@ -1267,7 +1267,7 @@
         },
         "results": {
           "items": {
-            "$ref": "#/definitions/KillTargetResult"
+            "$ref": "#/definitions/KillResult"
           },
           "type": "array"
         }
@@ -1279,7 +1279,7 @@
         "results"
       ]
     },
-    "KillTargetResult": {
+    "KillResult": {
       "properties": {
         "port": {
           "type": "integer"
@@ -1294,7 +1294,14 @@
           "type": "string"
         },
         "method": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "sigterm",
+            "sigkill",
+            "docker_stop",
+            "map_stop",
+            "none"
+          ]
         },
         "ok": {
           "type": "boolean"
@@ -1471,6 +1478,24 @@
         "ok",
         "affected",
         "stopped"
+      ]
+    },
+    "MutationResult": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "affected": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "ok",
+        "affected"
       ]
     },
     "OKResult": {
@@ -3054,7 +3079,7 @@
         "$ref": "#/definitions/GroupsKillParams"
       },
       "result": {
-        "$ref": "#/definitions/KillResult"
+        "$ref": "#/definitions/KillEnvelope"
       }
     },
     "groups.list": {
@@ -3162,7 +3187,7 @@
         "$ref": "#/definitions/PortsKillParams"
       },
       "result": {
-        "$ref": "#/definitions/KillResult"
+        "$ref": "#/definitions/KillEnvelope"
       }
     },
     "ports.list": {
@@ -3270,7 +3295,7 @@
         "$ref": "#/definitions/SessionsKillParams"
       },
       "result": {
-        "$ref": "#/definitions/KillResult"
+        "$ref": "#/definitions/KillEnvelope"
       }
     },
     "sessions.list": {
