@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -90,6 +91,9 @@ func detachDaemon(ctx context.Context, socket string) error {
 
 	// The child inherits nothing but the environment: its output goes to the
 	// daemon log so a panic before the logger is up is still recoverable.
+	if err := os.MkdirAll(filepath.Dir(daemon.LogPath()), 0o700); err != nil {
+		return fmt.Errorf("creating the log directory: %w", err)
+	}
 	logFile, err := os.OpenFile(daemon.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", daemon.LogPath(), err)
