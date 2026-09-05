@@ -262,8 +262,50 @@ func TestKillRepublishesSoTheNextReadIsFresh(t *testing.T) {
 	}
 }
 
-// TestDryRunKillDoesNotRescan: nothing changed, so nothing needs republishing.
-func TestDryRunKillDoesNotRescan(t *testing.T) {
+// TestGroupsKillResolvesAgainstAFreshScan: a group gaining a service inside the
+// cache window must still be killed whole. `sonar up` starts three services in
+// well under CacheTTL, and resolving `sonar kill -g` against the cached
+// snapshot killed only the ones the last tick happened to see.
+func TestGroupsKillResolvesAgainstAFreshScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	c := h.dial(ctx)
+
+	inDemo := func(port int) ports.ListeningPort {
+		return ports.ListeningPort{
+			Port: port, BindAddress: "127.0.0.1", PID: 900 + port, Process: "listener",
+			RunID: "run-1", Tag: "svc", RunGroup: "demo",
+		}
+	}
+
+	h.setRows(inDemo(4331))
+	if _, err := h.loop.Snapshot(scanner.Include{}); err != nil {
+		t.Fatalf("priming: %v", err)
+	}
+
+	// A second service of the same group comes up right after that scan.
+	h.setRows(inDemo(4331), inDemo(4332))
+
+	var env rpc.KillEnvelope
+	if e := c.call("groups.kill", rpc.GroupsKillParams{Name: "demo", DryRun: true}, &env); e != nil {
+		t.Fatalf("groups.kill: %v", e)
+	}
+	if len(env.Results) != 2 {
+		t.Fatalf("results = %+v, want a row for each of the group's two ports", env.Results)
+	}
+	seen := map[int]bool{}
+	for _, r := range env.Results {
+		seen[r.Port] = true
+	}
+	if !seen[4331] || !seen[4332] {
+		t.Fatalf("killed ports %v, want both 4331 and 4332", seen)
+	}
+}
+
+// TestDryRunKillDoesNotRepublish: resolving the targets costs one scan, and a
+// dry run stops there — nothing changed, so nothing needs republishing.
+func TestDryRunKillDoesNotRepublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h := newHarness(t, ctx)
@@ -281,7 +323,7 @@ func TestDryRunKillDoesNotRescan(t *testing.T) {
 	}, &env); e != nil {
 		t.Fatalf("ports.kill: %v", e)
 	}
-	if after := h.loop.Status().Scans; after != before {
-		t.Errorf("a dry run rescanned: %d -> %d", before, after)
+	if after := h.loop.Status().Scans; after != before+1 {
+		t.Errorf("scans = %d, want exactly one (target resolution) more than %d", after, before)
 	}
 }

@@ -387,8 +387,10 @@ sonar wait 5432 3000 --timeout 60s && npm run migrate && npm run test
 **Daemon or direct scan.** Every read command asks the daemon if one is
 running, because it already has the answer and does not have to fork `lsof`.
 If none is running they scan directly and print one note on stderr saying so.
-Reads never start a daemon behind your back. `--no-daemon` forces the direct
-scan silently and works on any command:
+`sonar kill` follows the same rule: a reachable daemon does the killing, so it
+rescans immediately and its next answer — and the port history — already knows
+the port is gone. Neither reads nor kills start a daemon behind your back.
+`--no-daemon` forces the direct scan silently and works on any command:
 
 ```sh
 sonar list --no-daemon --json

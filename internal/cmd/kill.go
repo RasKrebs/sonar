@@ -79,6 +79,22 @@ func runKill(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
 	bindIP, _ := cmd.Flags().GetString("ip")
 
+	// A reachable daemon does the killing, so it rescans straight afterwards
+	// and the history ring sees the port go down (contract §22). Without this
+	// the daemon's own cache could still show the port for up to CacheTTL after
+	// `sonar kill` returned. The connect is dial-only, like the read commands
+	// in §20: killing is not a reason to start a daemon.
+	if c := daemonClient(cmd.Context()); c != nil {
+		defer c.Close()
+		return killThroughDaemon(cmd.Context(), c, args, bindIP)
+	}
+	return killDirect(cmd.Context(), args, bindIP)
+}
+
+// killDirect is the no-daemon path: scan here, kill here. It is also what runs
+// under --no-daemon and whenever the daemon is down, which is why it stays a
+// complete implementation rather than a degraded one.
+func killDirect(ctx context.Context, args []string, bindIP string) error {
 	snapshot := scanForKill()
 	targets, confirm, err := killTargets(args, snapshot, bindIP)
 	if err != nil {
@@ -89,20 +105,27 @@ func runKill(cmd *cobra.Command, args []string) error {
 		return reportKill(os.Stdout, nil, snapshot, killJSONFlag, killDryRunFlag)
 	}
 
+	opts := killOptions()
+	opts.Ports = snapshot
+
+	return killRun(ctx, targets, snapshot, opts,
+		confirm && !killYesFlag && !killDryRunFlag, killJSONFlag)
+}
+
+// killOptions is the killer configuration the flags describe, shared by both
+// paths so the daemon is asked for exactly what the direct path would do.
+func killOptions() killer.Options {
 	opts := killer.Options{
 		Tree:   killTreeFlag,
 		Force:  forceFlag,
 		Grace:  killGraceFlag,
 		DryRun: killDryRunFlag,
-		Ports:  snapshot,
 	}
 	if killNoEscalateFlag {
 		off := false
 		opts.Escalate = &off
 	}
-
-	return killRun(cmd.Context(), targets, snapshot, opts,
-		confirm && !killYesFlag && !killDryRunFlag, killJSONFlag)
+	return opts
 }
 
 // killRun is the body every kill-shaped command shares: confirm the plan when

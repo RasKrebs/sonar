@@ -101,9 +101,15 @@ func afterKill(req *Request, dryRun bool) {
 	republish(req.Runtime)
 }
 
-// killSnapshot is the state selectors and group members are resolved against:
-// the scanner's cache when it is fresh, a scan otherwise.
+// killSnapshot is the state selectors and group members are resolved against.
+//
+// It always scans: the cache may be up to CacheTTL old, and a group that gained
+// a service in that window would be killed only in part — which is exactly what
+// the direct `sonar kill` path, scanning at the moment it is asked, never does.
+// A kill is rare and deliberate; one scan is the right price for acting on what
+// is listening now.
 func killSnapshot(req *Request) (state.Snapshot, error) {
+	req.Runtime.Scanner.Invalidate()
 	snap, err := req.Runtime.Scanner.Snapshot(scanner.Include{})
 	if err != nil {
 		return state.Snapshot{}, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
