@@ -97,15 +97,19 @@ const template = `# sonar configuration
 
 # list:
 #   # Columns shown by default. Available: port, process, pid, type, url,
-#   # cpu, mem, threads, uptime, state, connections, container, image,
+#   # group, cpu, mem, threads, uptime, state, connections, container, image,
 #   # containerport, compose, project, user, bind, ip, health, latency
-#   columns: [port, process, container, image, containerport, url]
+#   # (tag is accepted as an alias of group)
+#   columns: [port, process, group, container, image, containerport, url]
 #   sort: port      # port | pid | name | type
 #   filter: ""      # docker | user | system | "" (all)
 #   all: false      # include desktop apps by default
 
 # daemon:
-#   idle_timeout: 30m   # stop when unused this long; 0 disables idle shutdown
+#   # sonar serve stops after this long with no clients, no subscribers and
+#   # no keepalive connection. 0 keeps it running until you stop it.
+#   idle_timeout: 30m
+#   # How much the daemon writes to ~/.config/sonar/daemon.log.
 #   log_level: info     # debug | info | warn | error
 
 # color: true       # set false to disable colored output
@@ -113,6 +117,14 @@ const template = `# sonar configuration
 # services:         # label custom/unknown ports (port: name)
 #   9000: php-fpm
 #   5050: my-dashboard
+
+# Environment overrides (no config key; set them in your shell):
+#   SONAR_DB       path to the database of names, pins and history
+#                  (default: sonar.db next to this file)
+#   SONAR_SOCKET   path the daemon listens on and every client dials
+#                  (default: what 'sonar daemon path' prints)
+#   SONAR_NO_HINTS set to 1 to silence the migration notices the renamed
+#                  commands print
 `
 
 // WriteTemplate writes a commented starter config to Path(), creating the

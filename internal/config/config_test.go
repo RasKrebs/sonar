@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -191,5 +192,18 @@ func TestWriteTemplateRefusesOverwrite(t *testing.T) {
 	}
 	if err := WriteTemplate(true); err != nil {
 		t.Errorf("force=true should overwrite, got %v", err)
+	}
+}
+
+// The template is the only documentation many users read, so the settings the
+// daemon actually honours have to be in it.
+func TestTemplateDocumentsTheDaemonAndItsEnvironment(t *testing.T) {
+	for _, want := range []string{
+		"# daemon:", "idle_timeout: 30m", "log_level: info",
+		"SONAR_DB", "SONAR_SOCKET", "SONAR_NO_HINTS",
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("config template does not mention %q", want)
+		}
 	}
 }
