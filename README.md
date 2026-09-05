@@ -13,20 +13,22 @@ Know what's running on your machine.
 
 </div>
 
-I got tired of running `lsof -iTCP -sTCP:LISTEN | grep ...` every time a port was already taken, then spending another minute figuring out if it was a Docker container or some orphaned dev server from another worktree. So I built sonar.
-
-It shows everything listening on localhost, with Docker container names, Compose projects, resource usage, and clickable URLs. You can kill processes, tail logs, shell into containers, and more — all by port number.
+Sonar shows everything listening on localhost and puts it in order: every port
+belongs to a **group** — normally the repository it was started from — and
+inside that group to a named **service**. Start your dev servers with
+`sonar start` and the whole project becomes one thing you can list as a tree,
+wait for, tail, and stop with a single command. Docker containers, Compose
+projects and processes you started by hand are picked up too, without any
+configuration.
 
 ```
-$ sonar list
-PORT   PROCESS                      CONTAINER                    IMAGE             CPORT   URL
-1780   proxy (traefik:3.0)          my-app-proxy-1               traefik:3.0       80      http://localhost:1780
-3000   next-server (v16.1.6)                                                               http://localhost:3000
-5432   db (postgres:17)             my-app-db-1                  postgres:17       5432    http://localhost:5432
-6873   frontend (frontend:latest)   my-app-frontend-1            frontend:latest   5173    http://localhost:6873
-9700   backend (backend:latest)     my-app-backend-1             backend:latest    8000    http://localhost:9700
-
-5 ports (4 docker, 1 user)
+$ sonar list --tree
+my-app  (3 ports, running)                        ~/code/my-app
+├─ 5432  db          postgres:17                  http://localhost:5432
+├─ 5173  frontend    vite (v5.4)                  http://localhost:5173
+└─ 8000  api         uvicorn app:app              http://localhost:8000
+ungrouped (1 port)
+└─ 3000  next-server (v16.1.6)                    http://localhost:3000
 ```
 
 ## Install
@@ -36,8 +38,6 @@ PORT   PROCESS                      CONTAINER                    IMAGE          
 ```sh
 brew install raskrebs/sonar/sonar
 ```
-
-On macOS this also installs the `sonar-tray` menu bar app.
 
 ### Install script
 
@@ -75,8 +75,6 @@ $env:SONAR_VERSION="vX.Y.Z"; irm https://raw.githubusercontent.com/raskrebs/sona
 go install github.com/raskrebs/sonar@latest
 ```
 
-> **Note:** `go install` only installs the CLI. The menu bar tray app (`sonar tray`) is a native Swift binary and must be built separately — see [Tray app](#tray-app) below.
-
 Shell completions (tab-complete port numbers):
 
 ```sh
@@ -85,35 +83,207 @@ sonar completion bash > /etc/bash_completion.d/sonar  # bash
 sonar completion fish | source                 # fish
 ```
 
-## Usage
+## Sixty seconds
 
-### List ports
+Prefix the commands in your `dev.sh` with `sonar start`:
 
 ```sh
-sonar list                     # show all ports
-sonar list --stats             # include CPU, memory, state, uptime
+#!/usr/bin/env bash
+sonar start --name db       --port 5432 -- docker compose up db &
+sonar start --name api      --port 8000 -- uv run uvicorn app:app &
+sonar start --name frontend --port 5173 -- npm run dev &
+wait
+```
+
+The group name comes from the repository, so nothing else needs configuring.
+In another terminal:
+
+```sh
+sonar list --tree
+```
+
+```
+my-app  (3 ports, running)                        ~/code/my-app
+├─ 5432  db          postgres:17                  http://localhost:5432
+├─ 5173  frontend    vite (v5.4)                  http://localhost:5173
+└─ 8000  api         uvicorn app:app              http://localhost:8000
+```
+
+And when you are done, stop the whole project — servers, watchers and workers:
+
+```sh
+sonar kill -g my-app
+```
+
+Examples below marked `# check` are executed against a fresh build by
+`scripts/readme-check.sh` on every CI run.
+
+## Commands
+
+### `sonar list`
+
+```sh
+sonar list
+sonar list --tree
+sonar list --group my-app
+sonar list --json
+# check
+```
+
+```sh
+sonar list --stats             # CPU, memory, threads, uptime, state
+sonar list --health            # HTTP health checks
 sonar list --filter docker     # only Docker ports
-sonar list --sort name         # sort by process name
-sonar list --json              # JSON output
+sonar list --sort name         # port | pid | name | type
 sonar list -a                  # include desktop apps
-sonar list -c port,cpu,mem,uptime,state  # custom columns
-sonar list --health            # run HTTP health checks
-sonar list --host user@server  # scan a remote machine via SSH
+sonar list -c port,name,group,cpu,mem
+sonar list --host user@server  # scan a remote machine over SSH
 ```
 
-By default, sonar hides desktop apps and system services that listen on TCP ports but aren't relevant to development — things like Figma, Discord, Spotify, ControlCenter, AirPlay, and other macOS `.app` bundles and `/System/Library/` daemons. Use `-a` to include them.
+Default columns are `port`, `process`, `group`, `container`, `image`,
+`containerport`, `url`, where `process` shows the name you gave the port
+(`sonar rename`), then the service name, then what was detected.
 
-Available columns: `port`, `process`, `pid`, `type`, `url`, `cpu`, `mem`, `threads`, `uptime`, `state`, `connections`, `health`, `latency`, `container`, `image`, `containerport`, `compose`, `project`, `user`, `bind`, `ip`
+Available columns: `port`, `process`, `pid`, `type`, `url`, `group`, `cpu`,
+`mem`, `threads`, `uptime`, `state`, `connections`, `health`, `latency`,
+`container`, `image`, `containerport`, `compose`, `project`, `user`, `bind`,
+`ip`.
 
-### Inspect a port
+Desktop apps and system services that happen to listen — Figma, Discord,
+Spotify, ControlCenter, macOS `.app` bundles, `/System/Library/` daemons — are
+hidden unless you pass `-a`.
+
+### `sonar start`
+
+Run a command as a named service in a group:
 
 ```sh
-sonar info 3000
+sonar start -- npm run dev
+sonar start --group my-app --name frontend -- npm run dev
+sonar start --port 5173 -- npm run dev        # expected port, before it binds
+sonar start --detach --name api -- uv run uvicorn app:app
+sonar start --list
 ```
 
-Shows everything about a port: full command, user, bind address, CPU/memory/threads, uptime, health check result, and Docker details if applicable.
+Nothing has to be passed:
 
-### Kill processes
+- **Group** — `--group`, else the `name` in the nearest `.sonar.yaml`, else the
+  git root's directory name (a worktree becomes `repo@worktree`), else the name
+  of the current directory.
+- **Name** — `--name`, else the `.sonar.yaml` service whose `cmd` matches, else
+  inferred from the command (`npm run dev` → `dev`, `uv run api` → `api`,
+  `python -m uvicorn` → `uvicorn`, `./dev.sh` → `dev.sh`).
+- **Port** — `--port` is a hint, not a binding: the run shows as `starting`
+  until the port is actually listening, and the daemon uses it to match the
+  process to the port.
+
+The child inherits stdin, stdout, stderr, cwd and environment, plus
+`SONAR_GROUP`, `SONAR_NAME` and `SONAR_RUN_ID`. It gets its own process group,
+so `sonar kill` takes down the whole tree — a dev server with its watchers and
+workers. Ctrl+C is forwarded, and sonar exits with the child's exit code.
+
+`--detach` returns immediately and writes the output to
+`~/.config/sonar/logs/<group>/<name>.log`. `--list` shows what sonar started
+(`--json` for the machine-readable form):
+
+```sh
+sonar start --list
+sonar start --detach --name demo --port 8123 -- sleep 5
+sonar start --list --json
+# check
+```
+
+### `.sonar.yaml`
+
+A project names itself and its services in a `.sonar.yaml` at the repository
+root. It is optional — sonar groups by git root without it — and it is meant to
+be committed:
+
+```yaml
+name: my-app
+services:
+  - name: db
+    cmd: docker compose up db
+    port: 5432
+    health: /
+    description: Postgres 17
+    icon: database
+    color: "#4f8cc9"
+  - name: api
+    cmd: uv run uvicorn app:app --port 8000
+    cwd: backend
+    port: 8000
+    health: /healthz
+    depends_on: [db]
+  - name: frontend
+    cmd: npm run dev
+    port: 5173
+    depends_on: [api]
+ports: [9229]        # ports that belong to this project without a service
+```
+
+- `name` — the group name. No slashes, no whitespace.
+- `cmd`, `cwd`, `port` — how `sonar up` starts the service. `cwd` is relative to
+  the file and may not escape its directory.
+- `health` — an HTTP path the daemon polls while the service is up, so a
+  service can be *running* but not yet *healthy*. It reports `ok`, `fail` or
+  `unknown`, with the reason for a failure.
+- `description`, `icon`, `color` — free-form metadata for the desktop app; sonar
+  never infers them.
+- `depends_on` — start order. Naming a service that is not in the file, or a
+  cycle, is an error; an invalid file is reported once and never stops a scan.
+
+`.sonar.yml` is read if that is how you spell it; `sonar init` always writes
+`.sonar.yaml`. The daemon watches the projects it knows about and picks up
+edits to the file without a restart.
+
+### `sonar up`
+
+```sh
+sonar up                       # the .sonar.yaml at or above this directory
+sonar up my-app                # a group by name
+sonar up --only api,frontend
+sonar up --json
+```
+
+Starts every service the group's `.sonar.yaml` declares, in `depends_on` order:
+a service waits for the ports its dependencies declare before it is started, and
+one that is already listening is skipped. Each runs detached in its own process
+group, with its output in `~/.config/sonar/logs/<group>/<service>.log`.
+
+```
+  ✓ db        pid 41022  ~/.config/sonar/logs/my-app/db.log
+  - api       already running
+  ✓ frontend  pid 41108  ~/.config/sonar/logs/my-app/frontend.log
+
+2 started, 1 already running
+```
+
+A service that fails to start is reported on its own line and makes the command
+exit non-zero, whatever else came up. Stop them all again with
+`sonar kill -g my-app`. `sonar up` needs the daemon and starts it if it is not
+already running.
+
+### `sonar groups` and `sonar init`
+
+```sh
+sonar init --dry-run
+sonar groups
+sonar groups --json
+# check
+```
+
+`sonar groups` lists every group sonar can see and where each name came from:
+`manual` (you pinned it with `sonar assign`), `start` (a `sonar start` run),
+`file` (a `.sonar.yaml`) or `auto` (the git root or the Compose project).
+`sonar groups <name>` shows one group's ports and services, and the services
+that are declared but not running.
+
+`sonar init` writes a `.sonar.yaml` at the git root from what is listening right
+now — desktop apps and ports below 1024 left out. It refuses to overwrite
+without `--force`, and `--dry-run` prints the file instead of writing it.
+
+### `sonar kill`
 
 ```sh
 sonar kill 3000                            # SIGTERM, then SIGKILL after 5s
@@ -123,156 +293,277 @@ sonar kill --pid 12345 --tree              # by process id
 sonar kill -g my-app                       # a whole group, confirms unless -y
 sonar kill --all --filter docker -y        # every container publishing a port
 sonar kill --all --project my-app          # one Compose project
-sonar kill 3000 --tree --dry-run --json    # show the plan, change nothing
+sonar kill 3000 --ip 127.0.0.1             # one bind address of several
 ```
 
-Docker containers are stopped with `docker stop` instead of sending signals.
+Show the plan and change nothing:
+
+```sh
+sonar kill --all --dry-run --json
+# check
+```
+
+A positional argument is read as a port, and as a pid only when nothing is
+listening on that number. `-g` matches the resolved group, a legacy run tag or
+id, and the Compose project, case-insensitively.
 
 A process that ignores SIGTERM is sent SIGKILL once the port is still listening
-after `--grace` (5s by default); `--no-escalate` turns that off. A listener
-started through `sonar run` is stopped together with its whole process tree, so
-a dev server takes its watchers and workers with it. `--json` prints one row per
-process: `{port, bind_address, pid, name, method, ok, error}`, where `method` is
-one of `sigterm`, `sigkill`, `docker_stop`, `map_stop` or `none`.
+after `--grace` (5s); `--no-escalate` turns that off. Children are signalled
+before parents, so a tree comes down in order. Docker containers are stopped
+with `docker stop` and never signalled. A listener started by `sonar start` is
+always stopped together with its process group.
 
-### View logs
+`--json` prints one row per process:
+`{port, bind_address, pid, name, method, ok, error}`, where `method` is
+`sigterm`, `sigkill`, `docker_stop`, `map_stop` or `none`. An empty sweep exits
+0; an unknown group exits 1.
 
-```sh
-sonar logs 3000
-```
-
-For Docker containers, runs `docker logs -f`. For native processes, discovers log files via `lsof` and tails them. Falls back to macOS `log stream` or Linux `/proc/<pid>/fd`.
-
-### Attach to a service
+### `sonar rename`, `sonar assign`, `sonar history`
 
 ```sh
-sonar attach 3000                          # shell into Docker container, or TCP connect
-sonar attach 3000 --shell bash             # specific shell
+sonar rename 3000 storefront     # a name of your own, survives restarts
+sonar rename 3000 --clear
+sonar assign 3000 my-app         # pin a port to a group by hand
+sonar assign 3000 --clear
+sonar history                    # everything that came up, went down, restarted
+sonar history 3000 --since 24h --limit 20
 ```
-
-### Watch for changes
 
 ```sh
-sonar watch                                # poll every 2s, show diffs
-sonar watch --stats                        # live resource stats (like docker stats)
-sonar watch -i 500ms                       # faster polling
-sonar watch --notify                       # desktop notifications when ports go up/down
-sonar watch --host user@server             # watch a remote machine
+sonar history --since 1h
+sonar history --json
+# check
 ```
 
-### Dependency graph
+Names and pins are stored in sonar's database, keyed by the most specific thing
+known about the port: the run (`run:<group>/<name>`), the container
+(`docker:<project>/<service>`), the working directory, and the port number
+last. A renamed dev server keeps its name across restarts; a name pinned to
+port 3000 alone applies to whatever answers there. These three commands need
+the daemon and start it if it is not running.
+
+### Reading a port
 
 ```sh
-sonar graph                                # show which services talk to each other
-sonar graph --json                         # structured output
-sonar graph --dot                          # Graphviz DOT format
+sonar info 3000                            # command, user, bind, stats, health
+sonar logs 3000                            # tail; docker logs for containers
+sonar wait 5432 3000 --timeout 60s         # block until ready
+sonar wait 5432 --http=/health             # wait for HTTP 200-399, not just TCP
+sonar next 3000                            # first free port from 3000
+sonar next 3000-3100 -n 3                  # three consecutive free ports
+sonar graph                                # who is connected to whom
+sonar graph --dot                          # Graphviz
+sonar open 3000                            # open in the browser
+sonar attach 3000                          # shell into the container, or TCP
+sonar watch                                # live view
+sonar watch --stats --notify
 ```
-
-Shows established connections between listening ports (e.g. your backend connecting to postgres).
-
-### Profiles
-
-Save a set of expected ports for a project, then check if they're all up or tear them down:
 
 ```sh
-sonar profile create my-app                # snapshot current ports
-sonar profile list                         # list saved profiles
-sonar profile show my-app                  # show profile details
-sonar up my-app                            # check which expected ports are running
-sonar down my-app                          # stop all ports in the profile
+sonar next 3000
+sonar next 3000-3100 -n 3 --json
+sonar graph --json
+sonar info --help
+# check
 ```
 
-### Wait for ports
-
-```sh
-sonar wait 5432                        # block until port is accepting connections
-sonar wait 5432 3000 6379              # wait for multiple ports
-sonar wait 5432 --timeout 30s         # fail after 30 seconds
-sonar wait 5432 --http                # wait for HTTP 200, not just TCP open
-sonar wait 5432 --http=/health        # check a specific endpoint
-sonar wait 5432 -i 500ms              # custom polling interval
-sonar wait 5432 -q                    # no output, just exit code (for scripts)
-```
-
-Useful for scripting around `docker compose up -d` or background services. The `--http` flag waits for an actual HTTP 200-399 response, not just a TCP socket, which catches services that accept connections before they're truly ready. Use `--http=/health` to check a specific endpoint. Exit codes: `0` (ready), `1` (timeout), `2` (interrupted).
+`sonar wait` exits `0` (ready), `1` (timeout) or `2` (interrupted), which makes
+it the thing to put between starting something and testing it:
 
 ```sh
 docker compose up -d
 sonar wait 5432 3000 --timeout 60s && npm run migrate && npm run test
 ```
 
-### Port mapping
+**Daemon or direct scan.** Every read command asks the daemon if one is
+running, because it already has the answer and does not have to fork `lsof`.
+If none is running they scan directly and print one note on stderr saying so.
+Reads never start a daemon behind your back. `--no-daemon` forces the direct
+scan silently and works on any command:
 
 ```sh
-sonar map 6873 3002
+sonar list --no-daemon --json
+# check
 ```
 
-Proxies traffic so the service on port 6873 is also available on port 3002.
+### The daemon
 
-### Find free ports
+One background process scans ports, resolves groups, polls health, keeps the
+database and streams changes to whoever is subscribed — the CLI, the desktop
+app, and editors.
 
 ```sh
-sonar next                                 # first next free port from 3000
-sonar next 8000                            # first next free port from 8000
-sonar next 3000-3100                       # first next free port in range
-sonar next -n 3                            # 3 consecutive free ports
-sonar next --json                          # JSON output
+sonar serve                  # in the foreground
+sonar serve --detach         # in the background
+sonar daemon status          # pid, uptime, subscribers, scans, capabilities
+sonar daemon path            # the socket it listens on
+sonar daemon log -n 50 -f    # what it is doing
+sonar daemon restart
+sonar daemon stop
 ```
-
-### Other
 
 ```sh
-sonar open 3000                            # open in browser
-sonar tray                                 # menu bar app with live stats (macOS)
-sonar --no-color                           # disable colors (also respects NO_COLOR env)
+sonar daemon path
+sonar daemon status --json
+sonar daemon log -n 5
+# check
 ```
 
-The `--stats` flag fetches per-process and per-container resource usage. For Docker containers, it uses the Docker Engine API for accurate per-container metrics. Without `--stats`, sonar returns instantly.
+| What | Where |
+|---|---|
+| Socket | `$XDG_RUNTIME_DIR/sonar/daemon.sock`, else `~/.config/sonar/daemon.sock`; `\\.\pipe\sonar` on Windows |
+| Database | `~/.config/sonar/sonar.db` (`SONAR_DB` overrides) |
+| Daemon log | `~/.config/sonar/daemon.log`, rotated at 5 MiB, three kept |
+| Run logs | `~/.config/sonar/logs/<group>/<service>.log` |
+| Config | `~/.config/sonar/config.yaml` |
 
-## Configuration
+`SONAR_SOCKET` overrides the socket path everywhere, for both the daemon and
+its clients — useful for a second isolated instance. The socket is created
+0600 in a 0700 directory, so only you can talk to it. Only one daemon runs at a
+time; a socket left behind by a crash is cleaned up on the next start.
 
-`sonar` reads optional defaults from `~/.config/sonar/config.yaml`. The file is
-optional — without it, built-in defaults apply. Command-line flags always
-override the config file.
+The daemon stops on its own after 30 minutes with no clients and no
+subscribers. Set `daemon.idle_timeout` in the config file to change that, or
+`0` to keep it running.
 
-Create a starter file:
+### Configuration
 
-```bash
-sonar config init       # write a commented template
-sonar config path       # print the file location
+`~/.config/sonar/config.yaml` is optional; flags always win.
+
+```sh
+sonar config path
+sonar config init
+# check
+```
+
+```sh
 sonar config edit       # open it in $EDITOR
 ```
 
-Example config:
-
 ```yaml
 list:
-  columns: [port, process, container, image, containerport, url]
+  columns: [port, process, group, container, image, containerport, url]
   sort: port            # port | pid | name | type
   filter: ""            # docker | user | system | "" (all)
   all: false            # include desktop apps by default
-color: true             # set false to disable colored output
+daemon:
+  idle_timeout: 30m     # 0 keeps the daemon running
+  log_level: info       # debug | info | warn | error
+color: true
 services:               # label custom/unknown ports
   9000: php-fpm
   5050: my-dashboard
 ```
 
-Invalid values are ignored with a warning; sonar continues with defaults.
+Invalid values are ignored with a warning and sonar carries on with defaults.
+Environment overrides that have no config key: `SONAR_DB`, `SONAR_SOCKET`, and
+`SONAR_NO_HINTS=1` to silence the migration notices below.
 
-## Tray app
-
-The menu bar tray app (macOS only) is a native Swift binary that shows live port stats in your menu bar. If you installed sonar via the install script or a GitHub release, the tray binary (`sonar-tray`) is included automatically.
-
-If you installed via `go install`, build it manually:
+### Agents: MCP, skills and hooks
 
 ```sh
-swiftc -O -o sonar-tray tray/SonarTray.swift -target arm64-apple-macos13
+sonar install mcp --claude-code               # merge into <git root>/.mcp.json
+sonar install mcp --cursor --scope user       # ~/.cursor/mcp.json
+sonar install mcp --codex                     # codex mcp add
+sonar install skills --claude-code            # the bundled sonar skill
+sonar install hooks --claude-code             # optional, see below
 ```
 
-Then move `sonar-tray` somewhere on your `$PATH` and run:
+```sh
+sonar install mcp --generic --print
+sonar install skills --print
+sonar install hooks --print
+# check
+```
+
+`install mcp` registers `{"command": "sonar", "args": ["mcp"]}` and leaves every
+other server and key in the file alone; running it twice changes nothing, and
+`--uninstall` removes exactly what sonar wrote. The `sonar mcp` server itself
+lands in the next milestone — the wiring is here first so a client is already
+configured when it does.
+
+`install skills` writes the bundled skill, which teaches an agent to start
+servers with `sonar start --`, to `sonar wait` instead of sleeping, and to
+clean up what it started. `install hooks` adds two Claude Code hooks: one
+exports `SONAR_SESSION` so everything a session starts is attributed to it, the
+other suggests `sonar start --` when a bare dev server is about to run (it
+advises, it never blocks). Both take `--scope project|user`, `--print` and
+`--uninstall`.
+
+### The desktop app
+
+The Sonar app is the same picture in a window and in the menu bar or system
+tray: groups down the side, ports in a grid with live stats and health, logs,
+and the buttons for everything above. It talks to the same daemon, so the CLI
+and the app never disagree. `sonar tray` launches it if it is installed and
+otherwise tells you where to get it:
+<https://github.com/raskrebs/sonar/releases>.
+
+Until the app ships, macOS release tarballs still carry the old `sonar-tray`
+menu bar binary, and `sonar tray` falls back to it when the app is not
+installed.
+
+## Moving from the old commands
+
+The pre-group commands still work and print a single line on stderr saying what
+replaced them. They go away one minor release from now. `SONAR_NO_HINTS=1`
+silences the notices, and `--json` output never carries them.
+
+| Old | New |
+|---|---|
+| `sonar run --tag X -- cmd` | `sonar start --group X -- cmd` |
+| `sonar runs` | `sonar start --list` |
+| `sonar list --tag X` | `sonar list --group X` |
+| `sonar kill-all --filter docker` | `sonar kill --all --filter docker` |
+| `sonar down X` | `sonar kill -g X` |
+| `sonar profile create X` | `sonar init` |
+| `sonar profile show X` | `sonar groups X` |
+| `sonar up X` (checked a profile) | `sonar up X` now *starts* the group |
+| `sonar tray` (Swift menu bar app) | `sonar tray` launches the desktop app |
+
+Profiles were a per-machine snapshot of ports; `.sonar.yaml` is committed with
+the project. Convert one and read it before you keep it — nothing is written
+for you:
 
 ```sh
-sonar tray
+sonar profile list
+# check
+```
+
+```sh
+sonar profile export my-app > .sonar.yaml
+```
+
+A profile never recorded how a service starts, so the proposal has ports,
+names and health paths, and you fill in `cmd`.
+
+## Troubleshooting
+
+**Something is wrong with the daemon.** `sonar daemon log -f` while you
+reproduce it, and `sonar daemon status` for pid, uptime and scan count. Stop
+it with `sonar daemon stop`; every read command keeps working without it.
+
+**"daemon unavailable, using direct scan".** Nothing is listening on the
+socket. That is normal — reads do not start a daemon. Run `sonar serve -d` if
+you want one.
+
+**A socket left over from a crash.** `sonar daemon path` shows it; starting a
+daemon removes a stale one by itself. If a second daemon refuses to start while
+the first is gone, `sonar daemon restart` clears the lock.
+
+**Ports are missing from the list.** Processes owned by another user are
+invisible without privileges; sonar says so under the table. Re-run with
+`sudo sonar list` to see them. On Linux, `ss` must be installed
+(`iproute2`); on Windows, `netstat` is used.
+
+**A kill did nothing.** Docker containers are stopped through the Docker
+daemon: check `docker ps`. A process that ignores SIGTERM needs `-f`, and one
+supervised by something else (systemd, Compose `restart: always`) comes back
+by design — stop the supervisor.
+
+```sh
+sonar version
+# check
 ```
 
 ## Supported platforms
