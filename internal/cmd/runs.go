@@ -25,6 +25,8 @@ func init() {
 }
 
 func runsRun(cmd *cobra.Command, args []string) error {
+	Hint(cmd, HintRunsToStartList())
+
 	// Load prunes dead pids, so what remains is the set of live tagged runs.
 	reg := runs.Load()
 	active := reg.Active()

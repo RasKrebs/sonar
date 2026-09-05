@@ -22,6 +22,7 @@ var downCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		Hint(cmd, HintDownToKill(args[0]))
 		prof, err := profile.Load(args[0])
 		if err != nil {
 			return err

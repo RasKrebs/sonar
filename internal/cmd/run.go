@@ -47,6 +47,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return errors.New("no command given; usage: sonar run --tag <label> -- <command> [args...]")
 	}
 
+	Hint(cmd, HintRunToStart(runTag, args))
+
 	id := runID
 	if id == "" {
 		id = generateShortID()

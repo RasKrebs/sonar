@@ -31,6 +31,7 @@ Examples:
   sonar kill-all --filter docker --yes        # skip confirmation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		Hint(cmd, HintKillAllToKill(killAllFilterFlag, killAllProjectFlag, killAllYesFlag, killAllForceFlag))
 		snapshot := scanForKill()
 		targets, err := sweepTargets(snapshot, killAllFilterFlag, killAllProjectFlag)
 		if err != nil {

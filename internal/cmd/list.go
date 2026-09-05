@@ -68,6 +68,9 @@ func listRun(cmd *cobra.Command, args []string) error {
 	if group == "" {
 		group = tagFlag
 	}
+	if tagFlag != "" {
+		Hint(cmd, HintTagToGroup("list", tagFlag))
+	}
 	ipVersion := ""
 	if ipv4Flag {
 		ipVersion = "IPv4"
