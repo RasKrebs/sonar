@@ -128,6 +128,33 @@ func TestProfileAliasNoticesAndExports(t *testing.T) {
 	}
 }
 
+// The environment switch has to work through a real invocation, not only
+// through the helper: a script that sets it once should never see a notice.
+func TestNoHintsEnvSilencesARealInvocation(t *testing.T) {
+	runsJSONFlag = false
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(HintEnv, "1")
+	resetHints()
+
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs([]string{"runs"})
+	defer func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		rootCmd.SetArgs(nil)
+	}()
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("sonar runs: %v", err)
+	}
+	if countNotices(errOut.String()) != 0 {
+		t.Fatalf("SONAR_NO_HINTS=1 must silence the notice, got:\n%s", errOut.String())
+	}
+}
+
 func TestNoHintsEnvSilencesTheNotice(t *testing.T) {
 	t.Setenv(HintEnv, "1")
 	resetHints()
