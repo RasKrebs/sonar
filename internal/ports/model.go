@@ -48,7 +48,8 @@ type ListeningPort struct {
 	// Tagged-run attribution: set when this listener (or one of its ancestors)
 	// was spawned via `sonar run --tag`. Populated during Enrich by walking the
 	// PPID ancestry against the runs registry.
-	Tag        string // caller-supplied label
+	Tag        string // the run's service name (a `sonar run --tag` label)
+	RunGroup   string // the run's group, empty for a legacy `sonar run --tag`
 	RunID      string // caller-supplied (or generated) stable run id
 	RunRootPID int    // pid of the `sonar run` ancestor that owns Tag/RunID
 
