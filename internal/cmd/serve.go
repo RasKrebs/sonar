@@ -128,6 +128,10 @@ func detachDaemon(ctx context.Context, socket string) error {
 	return nil
 }
 
+// stopTimeout bounds how long `daemon stop` and `daemon restart` wait for the
+// previous daemon to let go of the socket and the lock.
+const stopTimeout = 10 * time.Second
+
 // waitForSocketGone is the inverse of WaitForSocket, used by `daemon restart`.
 func waitForSocketGone(socket string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
@@ -137,4 +141,23 @@ func waitForSocketGone(socket string, timeout time.Duration) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// waitForDaemonGone waits until the previous daemon has both stopped accepting
+// connections and released the single-instance lock. The socket closes first
+// and the lock is released last, so a restart that only waited for the socket
+// raced the old daemon's teardown: the replacement started, lost the lock, and
+// exited "already running", leaving nothing running (contract §21).
+func waitForDaemonGone(socket string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	waitForSocketGone(socket, timeout)
+
+	remaining := time.Until(deadline)
+	if remaining < time.Second {
+		remaining = time.Second
+	}
+	if err := daemon.WaitForLockRelease(daemon.LockPath(), remaining); err != nil {
+		return fmt.Errorf("the running daemon did not shut down: %w\nhint: `sonar daemon status` shows it; kill it and retry", err)
+	}
+	return nil
 }

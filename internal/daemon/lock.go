@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/raskrebs/sonar/internal/runs"
 )
 
 // ErrAlreadyRunning is returned by AcquireLock when another daemon holds the
@@ -82,6 +85,41 @@ func (l *Lock) Release() error {
 
 // Path is the lock file's path.
 func (l *Lock) Path() string { return l.path }
+
+// WaitForLockRelease blocks until the daemon lock at path is free, then
+// returns. It is what `sonar daemon restart` waits on: a daemon closes its
+// socket well before it releases the lock, so waiting for the socket to stop
+// accepting is not enough — the replacement daemon would start, fail to take
+// the lock, exit "already running", and leave nothing running (contract §21).
+//
+// The lock is taken and immediately released, which is the only honest test
+// that it is free. A lock whose recorded holder is gone is also treated as
+// free, so a stale lock file cannot make restart hang for the whole timeout.
+func WaitForLockRelease(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for {
+		lock, err := AcquireLock(path)
+		if err == nil {
+			_ = lock.Release()
+			return nil
+		}
+		if !IsAlreadyRunning(err) {
+			// Anything other than "someone holds it" (an unreadable directory,
+			// say) will not resolve itself by waiting.
+			return err
+		}
+		last = err
+		var already *ErrAlreadyRunning
+		if errors.As(err, &already) && already.PID > 0 && !runs.PIDAlive(already.PID) {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the previous daemon still holds %s after %s: %w", path, timeout, last)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
 
 // LockHolderPID reads the pid recorded in a lock file. It returns 0 when the
 // file is missing or unreadable; it does not prove the process is alive.

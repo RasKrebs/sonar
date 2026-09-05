@@ -422,3 +422,65 @@ func TestProtocolMismatchIsReported(t *testing.T) {
 		t.Fatalf("CheckProtocol(9.0.0) = %v, want a ProtocolMismatchError", err)
 	}
 }
+
+// TestDaemonRestartIsRepeatable is the smoke-test regression: `sonar daemon
+// restart` waited only for the socket to stop accepting, but a daemon releases
+// its single-instance lock after it closes the socket. The replacement raced
+// that release, lost the lock and exited "already running" — two of three
+// attempts left nothing running at all. Five restarts in a row must each leave
+// a daemon up.
+func TestDaemonRestartIsRepeatable(t *testing.T) {
+	e := newEnv(t)
+	e.serve()
+	// After the first restart the daemon is detached, so the env's own cleanup
+	// (which kills the foreground child) no longer owns it.
+	t.Cleanup(func() { _ = e.command("daemon", "stop").Run() })
+
+	lastPID := ""
+	for i := 1; i <= 5; i++ {
+		out, err := e.command("daemon", "restart").CombinedOutput()
+		if err != nil {
+			t.Fatalf("restart %d of 5 failed: %v\n%s", i, err, out)
+		}
+
+		statusOut, err := e.command("daemon", "status").CombinedOutput()
+		if err != nil {
+			t.Fatalf("no daemon running after restart %d of 5: %v\nrestart said:\n%s\nstatus said:\n%s",
+				i, err, out, statusOut)
+		}
+		if !strings.Contains(string(statusOut), "running       yes") {
+			t.Fatalf("after restart %d of 5 the daemon does not report itself running:\n%s", i, statusOut)
+		}
+
+		pid := statusField(string(statusOut), "pid")
+		if pid == "" {
+			t.Fatalf("`sonar daemon status` reported no pid after restart %d:\n%s", i, statusOut)
+		}
+		if pid == lastPID {
+			t.Errorf("restart %d reported the same pid %s as the previous one; the daemon was not replaced", i, pid)
+		}
+		lastPID = pid
+
+		// The running daemon must also own the single-instance lock. When the
+		// replacement raced the old daemon's teardown the lock file was left
+		// holding a dead pid, or removed from under the live daemon.
+		if runtime.GOOS != "windows" {
+			lockPath := filepath.Join(filepath.Dir(e.socket), "daemon.lock")
+			if holder := daemon.LockHolderPID(lockPath); fmt.Sprint(holder) != pid {
+				t.Errorf("after restart %d the lock at %s records pid %d, but the daemon reports pid %s",
+					i, lockPath, holder, pid)
+			}
+		}
+	}
+}
+
+// statusField pulls one value out of `sonar daemon status`'s aligned output.
+func statusField(out, name string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == name {
+			return fields[1]
+		}
+	}
+	return ""
+}
