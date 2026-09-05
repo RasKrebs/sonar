@@ -45,6 +45,13 @@ type ListeningPort struct {
 	Type        PortType
 	IsApp       bool // true for desktop apps (Figma, Discord, etc.)
 
+	// Display is a display name that was already resolved elsewhere. The
+	// daemon sets it when it converts a published state.Port back into a
+	// scanner row: the wire shape does not carry the parent cmdline
+	// DisplayName would need to recompute the same answer. Empty on a direct
+	// scan, where DisplayName derives the name itself.
+	Display string
+
 	// Tagged-run attribution: set when this listener (or one of its ancestors)
 	// was spawned via `sonar run --tag`. Populated during Enrich by walking the
 	// PPID ancestry against the runs registry.
@@ -120,6 +127,9 @@ func FindAllByPort(port int, all []ListeningPort) []ListeningPort {
 // during Enrich. This method is a pure view over those fields and is safe to
 // call from anywhere without I/O.
 func (lp *ListeningPort) DisplayName() string {
+	if lp.Display != "" {
+		return lp.Display
+	}
 	if lp.DockerComposeService != "" {
 		return lp.DockerComposeService
 	}
