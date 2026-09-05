@@ -271,6 +271,12 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	// is assembled: what gets published is already attributed and named.
 	rows, groupRows := l.attribute(pp)
 
+	// Configured health comes after attribution because it is the groups that
+	// say which port has a `health:` path. It runs on every tick regardless of
+	// `include`: a health path in a `.sonar.yaml` is part of what the service
+	// is, not an opt-in statistic (step 1A.7).
+	probeConfigured(rows, groupRows)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
