@@ -14,13 +14,33 @@ import (
 // pollInterval is how often Autostart retries the dial while waiting.
 const pollInterval = 25 * time.Millisecond
 
+// NoAutostartEnv disables autostart for a whole process tree. `sonar` never
+// starts a daemon behind the back of anything that sets it, which is what the
+// test harness (internal/testenv) and CI use to keep a build from leaving a
+// daemon running on the machine.
+const NoAutostartEnv = "SONAR_NO_AUTOSTART"
+
 // Autostart spawns `sonar serve --detach` and waits, up to AutostartTimeout,
 // for the socket to accept connections (contract §7). binary defaults to the
 // running executable, so a client always starts the daemon it was built with.
+//
+// It refuses in two cases, both of them "this is not a sonar install": when
+// NoAutostartEnv is set, and when the executable it would spawn is a Go test
+// binary (see daemon.IsTestBinary — that spawn re-runs the test suite in the
+// background rather than starting a daemon).
 func Autostart(ctx context.Context, binary, socket string) error {
+	if daemon.EnvEnabled(os.Getenv(NoAutostartEnv)) {
+		return fmt.Errorf("%w: autostart is disabled by %s=%s",
+			ErrNotRunning, NoAutostartEnv, os.Getenv(NoAutostartEnv))
+	}
+
 	exe, err := resolveBinary(binary)
 	if err != nil {
 		return err
+	}
+	if daemon.IsTestBinary(exe) && !daemon.TestDaemonAllowed() {
+		return fmt.Errorf("%w: refusing to autostart %s: it is a Go test binary, and `%s serve --detach` re-runs the whole test suite in the background instead of starting a daemon\nhint: a test needs an in-process daemon, or %s=1 to override",
+			ErrNotRunning, filepath.Base(exe), filepath.Base(exe), daemon.AllowTestDaemonEnv)
 	}
 
 	cmd := exec.Command(exe, "serve", "--detach")

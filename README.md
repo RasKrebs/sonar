@@ -606,8 +606,10 @@ services:               # label custom/unknown ports
 ```
 
 Invalid values are ignored with a warning and sonar carries on with defaults.
-Environment overrides that have no config key: `SONAR_DB`, `SONAR_SOCKET`, and
-`SONAR_NO_HINTS=1` to silence the migration notices below.
+Environment overrides that have no config key: `SONAR_DB`, `SONAR_SOCKET`,
+`SONAR_NO_HINTS=1` to silence the migration notices below, and
+`SONAR_NO_AUTOSTART=1` to stop any sonar client from starting a daemon it did
+not find — useful in CI, where a build should never leave a process behind.
 
 ### Agents: MCP, skills and hooks
 
