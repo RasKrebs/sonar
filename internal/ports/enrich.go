@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -270,45 +271,111 @@ func batchGetCommandsWindows(pidStrs []string) map[int]procInfo {
 		return result
 	}
 
-	r := csv.NewReader(strings.NewReader(strings.TrimSpace(string(out))))
-	records, err := r.ReadAll()
-	if err != nil {
-		return result
-	}
-
-	result = parseCIMProcesses(records)
+	result = parseCIMProcesses(string(out))
 	rememberScanParents(result)
 	return result
 }
 
-// parseCIMProcesses reads the CSV Get-CimInstance produced. Columns:
-// "ProcessId","ParentProcessId","StartedAt","CommandLine".
+// parseCIMProcesses reads the CSV Get-CimInstance produced.
+//
+// It finds its columns by name from the header rather than by position. The
+// query asks for ProcessId, ParentProcessId, StartedAt and CommandLine, and
+// Select-Object emits them in that order — but a positional parser turns any
+// future edit to that Select-Object list, or a PowerShell that orders or names
+// things differently, into silently misread rows: a parent pid read as a start
+// time, a command line read from the wrong column. Reading the header is one
+// map and removes the entire class.
+//
+// It is also tolerant per row. The previous parser called ReadAll and returned
+// nothing at all when any single line failed to parse, so one process with an
+// odd command line cost every other process on the machine its identity — and
+// on Windows identity is what decides whether a port is shown and which group
+// it joins. A row that cannot be read is skipped; the ones that can are kept.
 //
 // A row with no command line still counts: on Windows the command line is the
 // field most often withheld (another user's process, a protected one), and
 // dropping the row with it would throw away the parent pid and the start time
 // that did come back.
-func parseCIMProcesses(records [][]string) map[int]procInfo {
-	result := make(map[int]procInfo, len(records))
-	for i, record := range records {
-		if i == 0 {
-			continue // skip header
+func parseCIMProcesses(out string) map[int]procInfo {
+	result := map[int]procInfo{}
+	text := strings.TrimSpace(strings.TrimPrefix(out, "\ufeff"))
+	if text == "" {
+		return result
+	}
+	r := csv.NewReader(strings.NewReader(text))
+	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
+
+	var cols map[string]int
+	for {
+		rec, err := r.Read()
+		if errors.Is(err, io.EOF) {
+			return result
 		}
-		if len(record) < 4 {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
 		if err != nil {
+			var parseErr *csv.ParseError
+			if errors.As(err, &parseErr) {
+				continue // one unreadable line, not the end of the batch
+			}
+			return result
+		}
+		if len(rec) == 0 {
 			continue
 		}
-		ppid, _ := strconv.Atoi(strings.TrimSpace(record[1]))
-		cmd := strings.TrimSpace(record[3])
+		// PowerShell 5.1 emits a `#TYPE …` line unless -NoTypeInformation is
+		// passed. It is, but skipping the line costs nothing and a missing
+		// flag would otherwise be read as the header.
+		if strings.HasPrefix(strings.TrimSpace(rec[0]), "#TYPE") {
+			continue
+		}
+		if cols == nil {
+			cols = cimColumns(rec)
+			if _, ok := cols["processid"]; !ok {
+				return result // not a header we understand
+			}
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(field(rec, cols, "processid")))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		ppid, _ := strconv.Atoi(strings.TrimSpace(field(rec, cols, "parentprocessid")))
+		cmd := strings.TrimSpace(field(rec, cols, "commandline"))
 		if cmd == "" && ppid <= 0 {
 			continue
 		}
-		result[pid] = procInfo{command: cmd, startedAt: parseStartTime(record[2]), ppid: ppid}
+		result[pid] = procInfo{
+			command:   cmd,
+			startedAt: parseStartTime(field(rec, cols, "startedat")),
+			ppid:      ppid,
+		}
 	}
-	return result
+}
+
+// cimColumns maps a CSV header to column indexes, lowercased and trimmed so
+// the lookup does not depend on PowerShell's capitalisation.
+func cimColumns(header []string) map[string]int {
+	cols := make(map[string]int, len(header))
+	for i, name := range header {
+		key := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(name, "\ufeff")))
+		if key == "" {
+			continue
+		}
+		if _, taken := cols[key]; !taken {
+			cols[key] = i
+		}
+	}
+	return cols
+}
+
+// field reads a named column, returning "" when the header did not have it or
+// the row is short.
+func field(rec []string, cols map[string]int, name string) string {
+	i, ok := cols[name]
+	if !ok || i >= len(rec) {
+		return ""
+	}
+	return rec[i]
 }
 
 // batchEnrichProcessStats fetches CPU, memory, state, uptime for all non-Docker
@@ -471,15 +538,25 @@ func isWindowsDesktopApp(command string, process string, pid int) bool {
 		return false
 	}
 
+	// A binary running out of a temp directory is a scratch build, a one-off
+	// download or a test fixture. None of them is an installed application,
+	// and this is checked first because every temp directory lives inside a
+	// directory one of the rules below would otherwise claim:
+	// %LOCALAPPDATA%\Temp is under \AppData\, C:\Windows\Temp is under
+	// \Windows\, and a runner's D:\a\_temp is neither. Getting the order
+	// wrong hides exactly the ports a developer just started — which is how a
+	// listener built into the CI runner's temp directory vanished from
+	// `sonar list` while wininit.exe stayed.
+	if isWindowsTempPath(lower) {
+		return false
+	}
 	// Windows system services
 	if strings.Contains(lower, `\windows\`) {
 		return true
 	}
-	// User-installed desktop apps (AppData\Local houses Discord, Cursor, Slack,
-	// etc.), except the temp directory: %LOCALAPPDATA%\Temp is where every
-	// scratch build and one-off binary runs from, and none of them is an
-	// installed application.
-	if strings.Contains(lower, `\appdata\`) && !strings.Contains(lower, `\appdata\local\temp\`) {
+	// User-installed desktop apps: AppData\Local houses Discord, Cursor,
+	// Slack and the rest.
+	if strings.Contains(lower, `\appdata\`) {
 		return true
 	}
 	// Microsoft Store apps
@@ -505,6 +582,32 @@ func isWindowsDesktopApp(command string, process string, pid int) bool {
 
 	for _, app := range knownApps {
 		if strings.Contains(baseName, app) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWindowsTempPath reports whether an already-lowercased command line runs out
+// of a temporary directory.
+//
+// Two ways in, because neither alone is enough. A path segment literally called
+// `temp` or `tmp` covers %LOCALAPPDATA%\Temp, C:\Windows\Temp and the
+// `\_temp` a CI runner uses, whatever drive they sit on. And this process's own
+// os.TempDir() covers a TMP pointed somewhere with no such name in it at all —
+// the daemon and the listeners it is looking at share a machine, so its idea of
+// "temporary" is theirs.
+func isWindowsTempPath(lower string) bool {
+	normalized := strings.ReplaceAll(lower, "/", `\`)
+	for _, seg := range strings.Split(normalized, `\`) {
+		// A runner's `_temp` counts; `template` and `tempo` do not.
+		seg = strings.TrimPrefix(seg, "_")
+		if seg == "temp" || seg == "tmp" {
+			return true
+		}
+	}
+	if dir := strings.ToLower(strings.ReplaceAll(os.TempDir(), "/", `\`)); dir != "" && dir != `\` {
+		if strings.Contains(normalized, strings.TrimSuffix(dir, `\`)+`\`) {
 			return true
 		}
 	}
