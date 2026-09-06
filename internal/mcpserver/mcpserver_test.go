@@ -185,6 +185,7 @@ func TestListPortsFilters(t *testing.T) {
 		{"type system", map[string]any{"type": "system"}, []int{22}},
 		{"include apps", map[string]any{"include_apps": true}, []int{3000, 5173, 5432, 8080, 22, 7000}},
 		{"session", map[string]any{"session": "claude-code:9f2c"}, []int{3000}},
+		{"session prefix", map[string]any{"session": "claude-code"}, []int{3000}},
 		{"unknown session", map[string]any{"session": "codex:nope"}, []int{}},
 	}
 	for _, tt := range tests {
