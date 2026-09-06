@@ -59,6 +59,9 @@ type Server struct {
 	mcp    *mcp.Server
 	daemon *Daemon
 	log    *slog.Logger
+	// subs is the resource-subscription hub: it owns the one daemon
+	// state.subscribe the resources are served from.
+	subs *subscriptions
 	// ownsDaemon records whether Close should disconnect: a caller who passed
 	// their own connection keeps it.
 	ownsDaemon bool
@@ -85,36 +88,32 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		owns = true
 	}
 
-	s := &Server{
-		mcp: mcp.NewServer(
-			&mcp.Implementation{
-				Name:    ServerName,
-				Title:   "sonar",
-				Version: opts.Version,
-			},
-			&mcp.ServerOptions{Instructions: Instructions, Logger: log},
-		),
-		daemon:     d,
-		log:        log,
-		ownsDaemon: owns,
-	}
+	s := &Server{daemon: d, log: log, ownsDaemon: owns}
+	s.subs = newSubscriptions(s)
+	s.mcp = mcp.NewServer(
+		&mcp.Implementation{
+			Name:    ServerName,
+			Title:   "sonar",
+			Version: opts.Version,
+		},
+		&mcp.ServerOptions{
+			Instructions: Instructions,
+			Logger:       log,
+			// Setting these two is what advertises resources.subscribe.
+			SubscribeHandler:   s.subs.subscribe,
+			UnsubscribeHandler: s.subs.unsubscribe,
+		},
+	)
 	for _, register := range toolRegistrars {
 		register(s)
 	}
+	for _, register := range resourceRegistrars {
+		register(s)
+	}
+	for _, register := range promptRegistrars {
+		register(s)
+	}
 	return s, nil
-}
-
-// toolRegistrars holds one function per tools_*.go file, each adding that
-// file's tools to a new server. The list exists so a file can own its tools
-// end to end — schema, description, handler and registration — instead of
-// naming them here as well: the tool set is the sum of the files, and two
-// slices adding tools in parallel never touch the same line.
-var toolRegistrars []func(*Server)
-
-// registerTools adds a file's registrar. Call it from an init in the file that
-// declares the tools.
-func registerTools(register func(*Server)) {
-	toolRegistrars = append(toolRegistrars, register)
 }
 
 // MCP exposes the underlying server so later slices can add resources and
@@ -165,3 +164,16 @@ func outputSchema(v any) json.RawMessage {
 // boolPtr is for the annotation fields the SDK models as *bool, where nil,
 // false and true are three different statements.
 func boolPtr(b bool) *bool { return &b }
+
+// toolRegistrars holds one function per tools_*.go file, each adding that
+// file's tools to a new server. The list exists so a file can own its tools
+// end to end — schema, description, handler and registration — instead of
+// naming them here as well: the tool set is the sum of the files, and two
+// slices adding tools in parallel never touch the same line.
+var toolRegistrars []func(*Server)
+
+// registerTools adds a file's registrar. Call it from an init in the file that
+// declares the tools.
+func registerTools(register func(*Server)) {
+	toolRegistrars = append(toolRegistrars, register)
+}
