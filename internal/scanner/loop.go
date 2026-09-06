@@ -6,6 +6,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -76,6 +77,26 @@ type Options struct {
 	// and gets ports.Scan + docker.EnrichPorts + ports.Enrich.
 	Scan func(include Include) ([]ports.ListeningPort, error)
 
+	// Graph overrides the OS lookup of established connections between
+	// listening ports. Tests inject a fake; production leaves it nil and gets
+	// ports.BuildGraph + docker.BuildDockerGraph.
+	//
+	// It is a seam for the same reason Scan is. `ports.graph` and
+	// `ports.inspect` answer from the snapshot for the listeners, but the
+	// connections between them are a second, unrelated trip to the OS —
+	// `netstat -ano` on Windows, `lsof` on macOS, `ss` on Linux, plus a
+	// `docker inspect` whenever a container is listening. Left un-injectable,
+	// a unit test of the *handler* pays for all of that on whatever machine CI
+	// happens to be, and on a Windows runner with no Docker running it is
+	// seconds, not milliseconds.
+	Graph func(listening []ports.ListeningPort) ([]ports.Connection, error)
+
+	// Probe overrides the health probe. Tests inject a fake; production leaves
+	// it nil and gets ports.ProbeHealth. Both the configured-health tick and
+	// the `ports.health` / `ports.inspect` handlers go through it, so a test
+	// never opens a real socket.
+	Probe Probe
+
 	// Now overrides the clock, for tests.
 	Now func() time.Time
 }
@@ -115,6 +136,12 @@ func New(opts Options) *Loop {
 	if opts.Scan == nil {
 		opts.Scan = osScan
 	}
+	if opts.Graph == nil {
+		opts.Graph = osGraph
+	}
+	if opts.Probe == nil {
+		opts.Probe = ports.ProbeHealth
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -140,6 +167,32 @@ func osScan(include Include) ([]ports.ListeningPort, error) {
 		ports.EnrichStats(pp, docker.AllContainerStatsAsEntries())
 	}
 	return pp, nil
+}
+
+// osGraph is the production connection graph: the established links between
+// listening ports, plus the ones Docker only knows about.
+func osGraph(listening []ports.ListeningPort) ([]ports.Connection, error) {
+	edges, err := ports.BuildGraph(listening)
+	if err != nil {
+		return nil, err
+	}
+	containerEdges, err := docker.BuildDockerGraph(listening)
+	if err != nil {
+		return nil, fmt.Errorf("container graph: %w", err)
+	}
+	return append(edges, containerEdges...), nil
+}
+
+// Graph reports the established connections between the given listening ports.
+// Callers pass the listeners they already have — from the snapshot — so this
+// never re-scans for them.
+func (l *Loop) Graph(listening []ports.ListeningPort) ([]ports.Connection, error) {
+	return l.opts.Graph(listening)
+}
+
+// Probe runs one health probe through the loop's seam.
+func (l *Loop) Probe(host string, port int, path string, timeout time.Duration) ports.HealthResult {
+	return l.opts.Probe(host, port, path, timeout)
 }
 
 // SetDemand installs the demand callback after construction. The daemon uses
@@ -291,7 +344,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	// say which port has a `health:` path. It runs on every tick regardless of
 	// `include`: a health path in a `.sonar.yaml` is part of what the service
 	// is, not an opt-in statistic (step 1A.7).
-	probeConfigured(rows, groupRows)
+	probeConfigured(rows, groupRows, l.opts.Probe)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()

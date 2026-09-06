@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"sync"
+	"time"
 
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
@@ -11,6 +12,10 @@ import (
 // same ceiling the opt-in probe uses.
 const maxHealthProbes = 10
 
+// Probe is one health check. Options.Probe replaces it for tests; production
+// is ports.ProbeHealth.
+type Probe func(host string, port int, path string, timeout time.Duration) ports.HealthResult
+
 // probeConfigured fills Port.health for every `.sonar.yaml` service that
 // declares a `health:` path and whose port is listening.
 //
@@ -19,7 +24,7 @@ const maxHealthProbes = 10
 // the service *is*, not a statistic a client may or may not want, so the
 // daemon polls it as part of state (step 1A.7). Everything else about it is the
 // same probe — one HTTP GET, HealthTimeout, ten in flight.
-func probeConfigured(rows []state.Port, gg []state.Group) {
+func probeConfigured(rows []state.Port, gg []state.Group, probe Probe) {
 	targets := healthTargets(rows, gg)
 	if len(targets) == 0 {
 		return
@@ -35,7 +40,7 @@ func probeConfigured(rows []state.Port, gg []state.Group) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			t := targets[i]
-			r := ports.ProbeHealth(t.host, t.port, t.path, HealthTimeout)
+			r := probe(t.host, t.port, t.path, HealthTimeout)
 			status, reason := state.NormalizeHealth(r.Status)
 			results[i] = state.Health{
 				Status:     status,
