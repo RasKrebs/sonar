@@ -519,6 +519,12 @@
         "scan_interval_ms": {
           "type": "integer"
         },
+        "scan_base_interval_ms": {
+          "type": "integer"
+        },
+        "stats_interval_ms": {
+          "type": "integer"
+        },
         "scans": {
           "type": "integer"
         },
@@ -533,6 +539,8 @@
         "subscribers",
         "last_scan_at",
         "scan_interval_ms",
+        "scan_base_interval_ms",
+        "stats_interval_ms",
         "scans",
         "db_path"
       ]

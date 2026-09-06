@@ -112,18 +112,20 @@ func daemonStatusRun(cmd *cobra.Command, _ []string) error {
 
 	if daemonJSONFlag {
 		out, err := json.MarshalIndent(map[string]any{
-			"running":          true,
-			"pid":              status.PID,
-			"uptime":           status.Uptime,
-			"subscribers":      status.Subscribers,
-			"last_scan_at":     status.LastScanAt,
-			"scan_interval_ms": status.ScanIntervalMs,
-			"scans":            status.Scans,
-			"db_path":          status.DBPath,
-			"socket":           hello.Socket,
-			"daemon_version":   hello.DaemonVersion,
-			"protocol_version": hello.ProtocolVersion,
-			"capabilities":     hello.Capabilities,
+			"running":               true,
+			"pid":                   status.PID,
+			"uptime":                status.Uptime,
+			"subscribers":           status.Subscribers,
+			"last_scan_at":          status.LastScanAt,
+			"scan_interval_ms":      status.ScanIntervalMs,
+			"scan_base_interval_ms": status.ScanBaseIntervalMs,
+			"stats_interval_ms":     status.StatsIntervalMs,
+			"scans":                 status.Scans,
+			"db_path":               status.DBPath,
+			"socket":                hello.Socket,
+			"daemon_version":        hello.DaemonVersion,
+			"protocol_version":      hello.ProtocolVersion,
+			"capabilities":          hello.Capabilities,
 		}, "", "  ")
 		if err != nil {
 			return err
@@ -138,6 +140,8 @@ func daemonStatusRun(cmd *cobra.Command, _ []string) error {
 	fmt.Printf("uptime        %s\n", status.Uptime)
 	fmt.Printf("subscribers   %d\n", status.Subscribers)
 	fmt.Printf("scan interval %dms\n", status.ScanIntervalMs)
+	fmt.Printf("scan base     %dms\n", status.ScanBaseIntervalMs)
+	fmt.Printf("stats tick    %dms\n", status.StatsIntervalMs)
 	fmt.Printf("scans         %d\n", status.Scans)
 	if status.LastScanAt != "" {
 		fmt.Printf("last scan     %s\n", status.LastScanAt)

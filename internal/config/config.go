@@ -27,13 +27,16 @@ type Config struct {
 const DefaultIdleTimeout = 30 * time.Minute
 
 // DefaultStatsInterval and MinStatsInterval bound `daemon.stats_interval`, the
-// cadence of the daemon's stats-only tick. They mirror scanner.StatsInterval
-// and scanner.MinStatsInterval; config does not import the scanner, which
-// would drag the whole port pipeline into every CLI command that reads a
-// config file.
+// cadence of the daemon's stats-only tick. DefaultScanInterval and
+// MinScanInterval do the same for `daemon.scan_interval`, the base of the
+// port-scan cadence. All four mirror the scanner's own constants;
+// config does not import the scanner, which would drag the whole port
+// pipeline into every CLI command that reads a config file.
 const (
 	DefaultStatsInterval = 1 * time.Second
 	MinStatsInterval     = 250 * time.Millisecond
+	DefaultScanInterval  = 2 * time.Second
+	MinScanInterval      = 1 * time.Second
 )
 
 // DaemonConfig holds `sonar serve` settings.
@@ -49,6 +52,13 @@ type DaemonConfig struct {
 	// below MinStatsInterval is clamped to it. It does not affect how often
 	// ports are scanned — that cadence is adaptive and owned by the scanner.
 	StatsInterval string `yaml:"stats_interval"`
+	// ScanInterval is the base cadence of the port scan, as a Go duration
+	// ("2s", "5s"). Empty means DefaultScanInterval; anything below
+	// MinScanInterval is clamped to it. It sets the *base*: the scanner still
+	// backs off on unchanged scans, and the two ceilings it backs off to
+	// scale with this value, so raising it makes the whole curve slower
+	// rather than only its fastest step.
+	ScanInterval string `yaml:"scan_interval"`
 }
 
 // ResolvedIdleTimeout returns the parsed idle timeout, falling back to
@@ -76,6 +86,21 @@ func (d DaemonConfig) ResolvedStatsInterval() time.Duration {
 	}
 	if v < MinStatsInterval {
 		return MinStatsInterval
+	}
+	return v
+}
+
+// ResolvedScanInterval returns the parsed base scan cadence, falling back to
+// DefaultScanInterval and never returning less than MinScanInterval.
+func (d DaemonConfig) ResolvedScanInterval() time.Duration {
+	v, err := time.ParseDuration(strings.TrimSpace(d.ScanInterval))
+	if err != nil || v <= 0 {
+		// Including the unset case. There is no "off": the loop already parks
+		// itself whenever nothing is subscribed and nothing is reading.
+		return DefaultScanInterval
+	}
+	if v < MinScanInterval {
+		return MinScanInterval
 	}
 	return v
 }
@@ -150,9 +175,14 @@ const template = `# sonar configuration
 #   # How much the daemon writes to ~/.config/sonar/daemon.log.
 #   log_level: info     # debug | info | warn | error
 #   # How often cpu, memory and the host load strip refresh while the app (or
-#   # any other subscriber) is watching. Ports are scanned on their own
-#   # adaptive cadence and are not affected. Minimum 250ms.
+#   # any other subscriber) is watching. Minimum 250ms.
 #   stats_interval: 1s
+#   # The base cadence of the port scan. The scanner still slows itself down
+#   # on unchanged scans — to 2.5x this while something is subscribed and 5x
+#   # when only RPC reads are served — so this moves the whole curve.
+#   # Minimum 1s. Both intervals are read at startup: restart the daemon to
+#   # apply a change, and 'sonar daemon status' shows what is in effect.
+#   scan_interval: 2s
 
 # color: true       # set false to disable colored output
 
@@ -246,6 +276,16 @@ func validate(cfg *Config) []string {
 		} else if d < MinStatsInterval {
 			warnings = append(warnings, fmt.Sprintf("config: daemon.stats_interval %q is below the %s minimum — using %s", v, MinStatsInterval, MinStatsInterval))
 			cfg.Daemon.StatsInterval = MinStatsInterval.String()
+		}
+	}
+
+	if v := strings.TrimSpace(cfg.Daemon.ScanInterval); v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+			warnings = append(warnings, fmt.Sprintf("config: invalid daemon.scan_interval %q — using %s", v, DefaultScanInterval))
+			cfg.Daemon.ScanInterval = ""
+		} else if d < MinScanInterval {
+			warnings = append(warnings, fmt.Sprintf("config: daemon.scan_interval %q is below the %s minimum — using %s", v, MinScanInterval, MinScanInterval))
+			cfg.Daemon.ScanInterval = MinScanInterval.String()
 		}
 	}
 

@@ -678,3 +678,35 @@ func (c *testClient) subscribeAndSettle(p rpc.StateSubscribeParams) state.Delta 
 	}
 	return c.nextDelta()
 }
+
+// TestStatusReportsConfiguredIntervals: both `daemon.scan_interval` and
+// `daemon.stats_interval` are read once when the daemon starts, so
+// `daemon.status` is what tells a client — and the person who just edited the
+// config file and restarted — which values a running daemon is actually on.
+func TestStatusReportsConfiguredIntervals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := newHarness(t, ctx, func(o *scanner.Options) {
+		o.ScanInterval = 4 * time.Second
+		o.StatsInterval = 300 * time.Millisecond
+	})
+	c := h.dial(ctx)
+
+	var status rpc.DaemonStatusResult
+	if e := c.call("daemon.status", rpc.Empty{}, &status); e != nil {
+		t.Fatalf("daemon.status: %v", e)
+	}
+	if status.ScanBaseIntervalMs != 4000 {
+		t.Errorf("scan_base_interval_ms = %d, want 4000", status.ScanBaseIntervalMs)
+	}
+	if status.StatsIntervalMs != 300 {
+		t.Errorf("stats_interval_ms = %d, want 300", status.StatsIntervalMs)
+	}
+	// The adaptive interval is a separate number and still starts at the base
+	// rather than at the 2 s constant.
+	if status.ScanIntervalMs < status.ScanBaseIntervalMs {
+		t.Errorf("scan_interval_ms = %d, want at least the %dms base",
+			status.ScanIntervalMs, status.ScanBaseIntervalMs)
+	}
+}

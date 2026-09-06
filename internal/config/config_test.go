@@ -201,6 +201,7 @@ func TestWriteTemplateRefusesOverwrite(t *testing.T) {
 func TestTemplateDocumentsTheDaemonAndItsEnvironment(t *testing.T) {
 	for _, want := range []string{
 		"# daemon:", "idle_timeout: 30m", "log_level: info", "stats_interval: 1s",
+		"scan_interval: 2s",
 		"SONAR_DB", "SONAR_SOCKET", "SONAR_NO_HINTS",
 	} {
 		if !strings.Contains(template, want) {
@@ -247,5 +248,62 @@ func TestValidateClampsStatsInterval(t *testing.T) {
 	}
 	if cfg.Daemon.LogLevel != "debug" {
 		t.Errorf("log_level = %q, a valid neighbour was dropped", cfg.Daemon.LogLevel)
+	}
+}
+
+// daemon.scan_interval defaults to the scanner's 2 s base, is clamped rather
+// than trusted, and never leaves the loop with a zero cadence.
+func TestResolvedScanInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		set  string
+		want time.Duration
+	}{
+		{"unset", "", DefaultScanInterval},
+		{"explicit", "5s", 5 * time.Second},
+		{"at the floor", "1s", MinScanInterval},
+		{"below the floor", "200ms", MinScanInterval},
+		{"zero", "0", DefaultScanInterval},
+		{"nonsense", "whenever", DefaultScanInterval},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DaemonConfig{ScanInterval: tt.set}.ResolvedScanInterval()
+			if got != tt.want {
+				t.Errorf("ResolvedScanInterval(%q) = %s, want %s", tt.set, got, tt.want)
+			}
+		})
+	}
+}
+
+// An out-of-range scan_interval is repaired with a warning, the way
+// stats_interval is, and its neighbours survive.
+func TestValidateClampsScanInterval(t *testing.T) {
+	cfg := &Config{Daemon: DaemonConfig{ScanInterval: "50ms", StatsInterval: "1s"}}
+	warnings := validate(cfg)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "scan_interval") {
+		t.Fatalf("warnings = %v, want one about scan_interval", warnings)
+	}
+	if got := cfg.Daemon.ResolvedScanInterval(); got != MinScanInterval {
+		t.Errorf("scan_interval = %s, want the %s floor", got, MinScanInterval)
+	}
+	if cfg.Daemon.StatsInterval != "1s" {
+		t.Errorf("stats_interval = %q, a valid neighbour was dropped", cfg.Daemon.StatsInterval)
+	}
+}
+
+// A scan_interval that does not parse is dropped with a warning rather than
+// taken literally, and the daemon falls back to the default.
+func TestValidateDropsUnparseableScanInterval(t *testing.T) {
+	cfg := &Config{Daemon: DaemonConfig{ScanInterval: "every so often"}}
+	warnings := validate(cfg)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "scan_interval") {
+		t.Fatalf("warnings = %v, want one about scan_interval", warnings)
+	}
+	if cfg.Daemon.ScanInterval != "" {
+		t.Errorf("scan_interval = %q, want it dropped", cfg.Daemon.ScanInterval)
+	}
+	if got := cfg.Daemon.ResolvedScanInterval(); got != DefaultScanInterval {
+		t.Errorf("scan_interval = %s, want the %s default", got, DefaultScanInterval)
 	}
 }

@@ -97,11 +97,19 @@ type DaemonHelloResult struct {
 }
 
 type DaemonStatusResult struct {
-	PID            int    `json:"pid"`
-	Uptime         string `json:"uptime"`
-	Subscribers    int    `json:"subscribers"`
-	LastScanAt     string `json:"last_scan_at"`
-	ScanIntervalMs int    `json:"scan_interval_ms"`
+	PID         int    `json:"pid"`
+	Uptime      string `json:"uptime"`
+	Subscribers int    `json:"subscribers"`
+	LastScanAt  string `json:"last_scan_at"`
+	// ScanIntervalMs is the adaptive port-scan cadence right now; it moves
+	// between the base and a ceiling as scans come back unchanged.
+	ScanIntervalMs int `json:"scan_interval_ms"`
+	// ScanBaseIntervalMs and StatsIntervalMs are the effective settings
+	// behind it: `daemon.scan_interval` and `daemon.stats_interval` as this
+	// daemon resolved them at startup. Both are read once, so a config edit
+	// needs a daemon restart and these are how you check that it took.
+	ScanBaseIntervalMs int `json:"scan_base_interval_ms"`
+	StatsIntervalMs    int `json:"stats_interval_ms"`
 	// Scans counts the port scans this daemon has run. Two clients reading
 	// through the daemon must not make it grow faster than one does.
 	Scans  int64  `json:"scans"`

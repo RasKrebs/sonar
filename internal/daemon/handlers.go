@@ -80,13 +80,15 @@ func handleStatus(_ context.Context, req *Request) (any, error) {
 		lastScan = st.LastScanAt.Format(time.RFC3339)
 	}
 	return rpc.DaemonStatusResult{
-		PID:            rt.PID,
-		Uptime:         rt.Uptime().Round(time.Second).String(),
-		Subscribers:    rt.Subscribers(),
-		LastScanAt:     lastScan,
-		ScanIntervalMs: st.IntervalMs,
-		Scans:          st.Scans,
-		DBPath:         rt.DBPath(),
+		PID:                rt.PID,
+		Uptime:             rt.Uptime().Round(time.Second).String(),
+		Subscribers:        rt.Subscribers(),
+		LastScanAt:         lastScan,
+		ScanIntervalMs:     st.IntervalMs,
+		ScanBaseIntervalMs: st.BaseIntervalMs,
+		StatsIntervalMs:    st.StatsIntervalMs,
+		Scans:              st.Scans,
+		DBPath:             rt.DBPath(),
 	}, nil
 }
 

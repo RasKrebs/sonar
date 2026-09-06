@@ -47,7 +47,7 @@ func TestBackoffSequence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := BaseInterval
 			for i, w := range tt.want {
-				got = backoff(got, tt.max)
+				got = backoff(got, BaseInterval, tt.max)
 				if got != w {
 					t.Fatalf("backoff step %d = %s, want %s", i+1, got, w)
 				}
@@ -57,7 +57,7 @@ func TestBackoffSequence(t *testing.T) {
 }
 
 func TestBackoffNeverDropsBelowBase(t *testing.T) {
-	if got := backoff(time.Millisecond, MaxInterval); got != BaseInterval {
+	if got := backoff(time.Millisecond, BaseInterval, MaxInterval); got != BaseInterval {
 		t.Errorf("backoff(1ms) = %s, want the base interval %s", got, BaseInterval)
 	}
 }
@@ -337,4 +337,106 @@ func TestLoopParksWithNoSubscribers(t *testing.T) {
 // collector reports live cpu, which changes on nearly every tick.
 func fixedHost(context.Context) (state.Host, error) {
 	return state.Host{Kernel: "test-kernel", OS: "testos", Arch: "testarch"}, nil
+}
+
+// TestConfiguredScanIntervalMovesTheWholeCurve is `daemon.scan_interval`: the
+// value sets the base, and the two ceilings scale with it, so a daemon told to
+// scan every 5 s backs off to 12.5 s with a subscriber and 25 s without one
+// rather than to the constants that belong to the 2 s default.
+func TestConfiguredScanIntervalMovesTheWholeCurve(t *testing.T) {
+	subs := 1
+	l := New(Options{
+		HostStats:    fixedHost,
+		ScanInterval: 5 * time.Second,
+		Demand:       func() (int, Include) { return subs, Include{} },
+		Scan: func(Include) ([]ports.ListeningPort, error) {
+			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
+		},
+	})
+
+	l.scanAndPublish(Include{})
+	if got, want := l.Status().IntervalMs, 5000; got != want {
+		t.Fatalf("after the first scan interval = %dms, want the configured base %dms", got, want)
+	}
+
+	for i := 0; i < 20; i++ {
+		l.scanAndPublish(Include{})
+	}
+	if got, want := l.Status().IntervalMs, 12500; got != want {
+		t.Errorf("subscribed cap = %dms, want %dms (%v x the base)", got, want, SubscribedMaxFactor)
+	}
+
+	subs = 0
+	for i := 0; i < 20; i++ {
+		l.scanAndPublish(Include{})
+	}
+	if got, want := l.Status().IntervalMs, 25000; got != want {
+		t.Errorf("idle cap = %dms, want %dms (%d x the base)", got, want, IdleMaxFactor)
+	}
+}
+
+// TestConfiguredScanIntervalPacesTheTick: the interval the loop waits out
+// between ticks is the configured base, not the 2 s constant. The clock is
+// injected so the assertion is about the cadence rather than about how long
+// the test was willing to sleep.
+func TestConfiguredScanIntervalPacesTheTick(t *testing.T) {
+	frozen := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	now := frozen
+	l := New(Options{
+		HostStats:    fixedHost,
+		ScanInterval: 6 * time.Second,
+		Now:          func() time.Time { return now },
+		Demand:       func() (int, Include) { return 1, Include{} },
+		Scan: func(Include) ([]ports.ListeningPort, error) {
+			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
+		},
+	})
+
+	l.scanAndPublish(Include{})
+	if got := l.dueIn(); got != 6*time.Second {
+		t.Fatalf("dueIn right after a scan = %s, want the configured base 6s", got)
+	}
+	now = frozen.Add(5 * time.Second)
+	if got := l.dueIn(); got != time.Second {
+		t.Errorf("dueIn 5s into a 6s base = %s, want 1s", got)
+	}
+	now = frozen.Add(6 * time.Second)
+	if got := l.dueIn(); got > 0 {
+		t.Errorf("dueIn once the base has elapsed = %s, want a scan to be due", got)
+	}
+}
+
+// A scan_interval below the floor is clamped rather than honoured: a daemon
+// asked to scan every 10ms would spend the machine on `lsof`.
+func TestScanIntervalIsClampedToTheFloor(t *testing.T) {
+	l := New(Options{HostStats: fixedHost, ScanInterval: 10 * time.Millisecond})
+	if got, want := l.Status().BaseIntervalMs, int(MinScanInterval/time.Millisecond); got != want {
+		t.Errorf("base = %dms, want the %dms floor", got, want)
+	}
+}
+
+// TestStatusReportsTheEffectiveIntervals: both cadences are read once at
+// startup, so `daemon.status` is the only way to tell what a running daemon
+// actually settled on.
+func TestStatusReportsTheEffectiveIntervals(t *testing.T) {
+	l := New(Options{
+		HostStats:     fixedHost,
+		ScanInterval:  3 * time.Second,
+		StatsInterval: 500 * time.Millisecond,
+	})
+	st := l.Status()
+	if st.BaseIntervalMs != 3000 {
+		t.Errorf("BaseIntervalMs = %d, want 3000", st.BaseIntervalMs)
+	}
+	if st.StatsIntervalMs != 500 {
+		t.Errorf("StatsIntervalMs = %d, want 500", st.StatsIntervalMs)
+	}
+
+	def := New(Options{HostStats: fixedHost}).Status()
+	if def.BaseIntervalMs != int(BaseInterval/time.Millisecond) {
+		t.Errorf("default BaseIntervalMs = %d, want %d", def.BaseIntervalMs, BaseInterval/time.Millisecond)
+	}
+	if def.StatsIntervalMs != int(StatsInterval/time.Millisecond) {
+		t.Errorf("default StatsIntervalMs = %d, want %d", def.StatsIntervalMs, StatsInterval/time.Millisecond)
+	}
 }
