@@ -1,0 +1,13 @@
+# The relay image needs the Go module and nothing else. Keeping the context
+# small is most of the build time on a cold runner.
+.git
+.github
+docs
+scripts
+tray
+README.md
+LICENSE
+*.db
+*.db-wal
+*.db-shm
+Dockerfile*

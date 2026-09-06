@@ -70,6 +70,11 @@ jobs:
       - name: Integration tests
         run: go test -tags integration -timeout 10m ./internal/daemon/...
 
+      # The relay ships in the same binary, so a change that breaks
+      # `sonar relay serve` has to fail here rather than at tag time.
+      - name: Relay integration tests
+        run: go test -tags integration -timeout 10m ./internal/relay/...
+
   schema:
     name: Protocol schema up to date
     runs-on: ubuntu-latest
@@ -82,3 +87,22 @@ jobs:
 
       - name: Regenerate protocol schema
         run: go generate ./... && git diff --exit-code docs/schema
+
+  relay-image:
+    name: Relay image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only, never push: the release workflow owns publishing. This is
+      # here so a broken Dockerfile.relay fails a pull request instead of a tag.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.relay
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
