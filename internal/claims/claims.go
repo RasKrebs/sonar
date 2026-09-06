@@ -290,18 +290,18 @@ func group(rows []store.ClaimRow) []state.Claim {
 		if !ok {
 			c = &state.Claim{
 				Key: r.Key, Project: r.Project, Worktree: r.Worktree,
-				CreatedAt: r.CreatedAt.Format(time.RFC3339),
-				ExpiresAt: r.ExpiresAt.Format(time.RFC3339),
+				CreatedAt: stamp(r.CreatedAt),
+				ExpiresAt: stamp(r.ExpiresAt),
 			}
 			byKey[r.Key] = c
 			order = append(order, r.Key)
 		}
 		c.Ports = append(c.Ports, r.Port)
-		if r.CreatedAt.Format(time.RFC3339) < c.CreatedAt {
-			c.CreatedAt = r.CreatedAt.Format(time.RFC3339)
+		if stamp(r.CreatedAt) < c.CreatedAt {
+			c.CreatedAt = stamp(r.CreatedAt)
 		}
-		if r.ExpiresAt.Format(time.RFC3339) > c.ExpiresAt {
-			c.ExpiresAt = r.ExpiresAt.Format(time.RFC3339)
+		if stamp(r.ExpiresAt) > c.ExpiresAt {
+			c.ExpiresAt = stamp(r.ExpiresAt)
 		}
 	}
 	sort.Strings(order)
@@ -313,6 +313,10 @@ func group(rows []store.ClaimRow) []state.Claim {
 	}
 	return out
 }
+
+// stamp is the wire form of a claim time: UTC RFC 3339, so the strings sort
+// chronologically and every client reads one zone.
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 func (m *Manager) listening() (map[int]bool, error) {
 	if m.live == nil {

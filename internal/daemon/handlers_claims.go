@@ -83,7 +83,7 @@ func handleClaimsAcquire(_ context.Context, req *Request) (any, error) {
 		MutationResult: rpc.MutationResult{OK: true, Affected: portKeys(res.Ports)},
 		Key:            res.Key,
 		Ports:          res.Ports,
-		ExpiresAt:      res.ExpiresAt.Format(time.RFC3339),
+		ExpiresAt:      res.ExpiresAt.UTC().Format(time.RFC3339),
 	}, nil
 }
 
