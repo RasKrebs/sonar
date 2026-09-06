@@ -43,6 +43,10 @@ type Options struct {
 	// IdleTimeout stops the daemon after this long with no clients, no
 	// subscribers and no keepalive. Zero disables it.
 	IdleTimeout time.Duration
+	// StatsInterval is the cadence of the scanner's stats-only tick
+	// (`daemon.stats_interval`). Zero means scanner.StatsInterval. Ignored
+	// when Scanner is set, since the caller built the loop itself.
+	StatsInterval time.Duration
 	// Logger receives the daemon's structured log. Required in production;
 	// tests may leave it nil for a discard logger.
 	Logger *slog.Logger
@@ -114,6 +118,7 @@ func New(opts Options) *Server {
 			DaemonVersion:   opts.Version,
 			ProtocolVersion: rpc.ProtocolVersion,
 			Logger:          opts.Logger,
+			StatsInterval:   opts.StatsInterval,
 		})
 	}
 	s.loop.SetDemand(s.demand)
