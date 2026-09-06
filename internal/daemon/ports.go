@@ -310,7 +310,14 @@ func handlePortsNext(_ context.Context, req *Request) (any, error) {
 		occupied[row.Port] = true
 	}
 
-	// Claims (spec 2) exclude further ports here in a later step.
+	// Claims (spec 2 §4) are reservations nobody is listening on yet, so they
+	// have to be excluded here too — otherwise `sonar next` hands out the port
+	// another worktree is about to bind. A caller that passes its own
+	// claim_key still sees its own ports as free.
+	if err := excludeClaims(req.Runtime, p.ClaimKey, occupied); err != nil {
+		return nil, err
+	}
+
 	free := make([]int, 0, count)
 	for port := start; port <= end; port++ {
 		if occupied[port] {
@@ -427,3 +434,34 @@ func sortedPorts(pp []int) []int {
 
 // nowRFC3339 stamps stream chunks.
 func nowRFC3339() string { return time.Now().Format(time.RFC3339) }
+
+// excludeClaims marks every port held by a foreign claim as occupied. Ports
+// held by claimKey itself stay free: re-running `sonar next --claim` in the
+// worktree that owns them must return the same ports. A daemon with no
+// database has no claims and excludes nothing.
+func excludeClaims(rt *Runtime, claimKey *string, occupied map[int]bool) error {
+	if rt.Store == nil {
+		return nil
+	}
+	claimsMu.Lock()
+	defer claimsMu.Unlock()
+	m, err := claimsManager(rt)
+	if err != nil {
+		return err
+	}
+	held, err := m.Held()
+	if err != nil {
+		return claimsError("reading claims", err)
+	}
+	own := ""
+	if claimKey != nil {
+		own = *claimKey
+	}
+	for port, key := range held {
+		if own != "" && key == own {
+			continue
+		}
+		occupied[port] = true
+	}
+	return nil
+}
