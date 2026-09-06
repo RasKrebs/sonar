@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
-	procGetConsoleMode             = kernel32.NewProc("GetConsoleMode")
-	procSetConsoleMode             = kernel32.NewProc("SetConsoleMode")
+	kernel32                               = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleMode                     = kernel32.NewProc("GetConsoleMode")
+	procSetConsoleMode                     = kernel32.NewProc("SetConsoleMode")
 	enableVirtualTerminalProcessing uint32 = 0x0004
 )
 
