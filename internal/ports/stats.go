@@ -31,9 +31,9 @@ func parseDarwinStats(p *ListeningPort, fields []string) {
 	if p.StartedAt == "" {
 		p.StartedAt = parseStartTime(lstart)
 	}
-
-	// macOS: get thread count via proc_info or ps -M
-	p.ThreadCount = countThreadsDarwin(p.PID)
+	// Thread count is not in this call: macOS needs one `ps -M` per pid, so
+	// the caller decides whether that fork is worth paying for (the scan tick
+	// pays it, the 1 s stats tick does not).
 }
 
 // parseLinuxStats parses: %cpu rss nlwp state lstart...
