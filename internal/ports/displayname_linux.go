@@ -19,26 +19,18 @@ func batchGetCwds(pids []int) map[int]string {
 	return result
 }
 
-// batchGetServiceUnits returns pid -> systemd unit by reading
-// /proc/<pid>/cgroup and parsing the systemd cgroup line.
-//
-// A typical line looks like:
-//
-//	0::/system.slice/nginx.service
-//	0::/user.slice/user-1000.slice/user@1000.service/app.slice/myapp.service
-//
-// We extract the last "*.service" / "*.scope" segment as the unit name.
+// batchGetServiceUnits returns pid -> systemd unit for the pids that really
+// belong to a unit. Membership in a unit's cgroup is not enough: a process
+// inherits the cgroup of whoever started it, so a shell (or a CI runner's test
+// binary) would otherwise be named after the ambient session or agent unit.
+// See unitResolver for the attribution rules.
 func batchGetServiceUnits(pids []int) map[int]string {
 	result := make(map[int]string)
+	r := newUnitResolver()
 	for _, pid := range pids {
-		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
-		if err != nil {
-			continue
-		}
-		if unit := parseSystemdUnit(string(data)); unit != "" {
+		if unit := r.unitFor(pid); unit != "" {
 			result[pid] = unit
 		}
 	}
 	return result
 }
-
