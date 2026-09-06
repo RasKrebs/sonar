@@ -185,6 +185,7 @@ type PortsRenameResult struct {
 }
 
 type PortsNextParams struct {
+	HostParams
 	Start    int     `json:"start,omitempty"`
 	End      int     `json:"end,omitempty"`
 	Count    int     `json:"count,omitempty"`
@@ -404,6 +405,7 @@ type ConfigProblem struct {
 // default is a preview; Force is the wire form of `sonar init --force` and is
 // the only way past an existing file (contract §4, §16).
 type GroupsInitParams struct {
+	HostParams
 	RootDir string `json:"root_dir"`
 	Write   bool   `json:"write,omitempty"`
 	Force   bool   `json:"force,omitempty"`
@@ -419,6 +421,7 @@ type GroupsInitResult struct {
 // ------------------------------------------------------------------ runs ---
 
 type RunsRegisterParams struct {
+	HostParams
 	PID       int     `json:"pid"`
 	PPID      int     `json:"ppid"`
 	Group     string  `json:"group"`
@@ -443,6 +446,7 @@ type RunsRegisterResult struct {
 }
 
 type RunsUnregisterParams struct {
+	HostParams
 	PID int `json:"pid"`
 }
 
@@ -467,6 +471,7 @@ type RunRecord struct {
 }
 
 type RunsSpawnParams struct {
+	HostParams
 	Argv             []string          `json:"argv"`
 	Cwd              string            `json:"cwd"`
 	Env              map[string]string `json:"env,omitempty"`
@@ -494,6 +499,7 @@ type RunsSpawnResult struct {
 // schema has always carried it and every other duration on this wire is in
 // milliseconds. Neither set means DefaultTTL (24h).
 type ClaimsAcquireParams struct {
+	HostParams
 	Project    string `json:"project,omitempty"`
 	Worktree   string `json:"worktree,omitempty"`
 	Key        string `json:"key,omitempty"`
@@ -510,6 +516,7 @@ type ClaimsAcquireResult struct {
 }
 
 type ClaimsReleaseParams struct {
+	HostParams
 	Key string `json:"key"`
 }
 
@@ -559,6 +566,7 @@ type ConfigGetResult struct {
 }
 
 type ConfigSetParams struct {
+	HostParams
 	Patch map[string]any `json:"patch"`
 }
 

@@ -209,6 +209,9 @@
     },
     "ClaimsAcquireParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "project": {
           "type": "string"
         },
@@ -279,6 +282,9 @@
     },
     "ClaimsReleaseParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "key": {
           "type": "string"
         }
@@ -342,6 +348,9 @@
     },
     "ConfigSetParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "patch": {
           "type": "object"
         }
@@ -1111,6 +1120,9 @@
     },
     "GroupsInitParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "root_dir": {
           "type": "string"
         },
@@ -2384,6 +2396,9 @@
     },
     "PortsNextParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "start": {
           "type": "integer"
         },
@@ -2939,6 +2954,9 @@
     },
     "RunsRegisterParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "pid": {
           "type": "integer"
         },
@@ -2997,6 +3015,9 @@
     },
     "RunsSpawnParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "argv": {
           "items": {
             "type": "string"
@@ -3066,6 +3087,9 @@
     },
     "RunsUnregisterParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "pid": {
           "type": "integer"
         }
