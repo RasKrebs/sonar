@@ -32,9 +32,13 @@ func IsAlreadyRunning(err error) bool {
 	return errors.As(err, &e)
 }
 
-// Lock is the single-instance lock. It is an advisory whole-file lock (flock on
-// Unix, LockFileEx on Windows) on <socket dir>/daemon.lock whose contents are
-// the holder's pid, so a second `sonar serve` can name the process it lost to.
+// Lock is the single-instance lock: an advisory lock (flock on Unix,
+// LockFileEx on Windows) on <socket dir>/daemon.lock, whose contents are the
+// holder's pid so a second `sonar serve` can name the process it lost to.
+//
+// Unix locks the whole file; Windows locks one byte far past the end of it,
+// because a Windows lock also blocks reads of the range it covers and the pid
+// has to stay readable while the lock is held (see lock_windows.go).
 type Lock struct {
 	path string
 	f    *os.File

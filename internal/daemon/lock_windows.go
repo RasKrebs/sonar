@@ -13,14 +13,33 @@ import (
 // turn it into ErrAlreadyRunning.
 var errLockBusy = errors.New("lock held by another process")
 
-// lockWholeFile locks a range large enough to cover any lock file we write.
-const lockLow, lockHigh = ^uint32(0), ^uint32(0)
+// The lock is a single byte at offset 1<<62, past any byte the lock file will
+// ever hold.
+//
+// LockFileEx makes the range it locks unreadable to every other process, so
+// locking the whole file hid the one thing the file exists to publish: with a
+// daemon running, LockHolderPID and ErrAlreadyRunning.PID both came back 0 and
+// os.ReadFile failed with "another process has locked a portion of the file".
+// A range that cannot overlap the pid keeps the semantics we want from flock —
+// the lock lives on the open handle and dies with it — and leaves offset 0
+// readable to anyone who wants to know whose daemon is running.
+const (
+	lockOffsetLow  = 0
+	lockOffsetHigh = 1 << 30 // (1<<30)<<32 == byte 1<<62 of the file
+	lockBytesLow   = 1
+	lockBytesHigh  = 0
+)
+
+// lockRange is the region LockFileEx and UnlockFileEx both address. The offset
+// travels in the OVERLAPPED, the length in the byte-count arguments.
+func lockRange() *windows.Overlapped {
+	return &windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
+}
 
 func lockFile(f *os.File) error {
-	var overlapped windows.Overlapped
 	err := windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
-		0, lockLow, lockHigh, &overlapped)
+		0, lockBytesLow, lockBytesHigh, lockRange())
 	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
 		return errLockBusy
 	}
@@ -28,6 +47,6 @@ func lockFile(f *os.File) error {
 }
 
 func unlockFile(f *os.File) error {
-	var overlapped windows.Overlapped
-	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, lockLow, lockHigh, &overlapped)
+	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0,
+		lockBytesLow, lockBytesHigh, lockRange())
 }
