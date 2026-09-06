@@ -408,8 +408,12 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 
 var pipeSeq atomic.Int64
 
+// The binary goes under testenv.Root(): the leak gate only claims a `serve`
+// whose executable lives inside this run's own temp root, so a daemon this
+// harness starts has to be built there to be recognised — and one another run
+// built has to be somewhere else to be left alone.
 var buildSonar = sync.OnceValues(func() (string, error) {
-	dir, err := os.MkdirTemp("", "sonar-mcp-itest-bin")
+	dir, err := os.MkdirTemp(testenv.Root(), "sonar-mcp-itest-bin")
 	if err != nil {
 		return "", err
 	}

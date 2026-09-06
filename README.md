@@ -624,6 +624,14 @@ Environment overrides that have no config key: `SONAR_DB`, `SONAR_SOCKET`,
 `SONAR_NO_AUTOSTART=1` to stop any sonar client from starting a daemon it did
 not find — useful in CI, where a build should never leave a process behind.
 
+sonar's own test suite sets `SONAR_NO_AUTOSTART=1` for every test binary and,
+after the run, looks for a daemon that outlived it. That gate only claims a
+`serve` started from the run's private temp root, so two suites running side by
+side on one machine leave each other's daemons alone;
+`SONAR_TESTENV_GATE_ALL=1` widens it back to every `sonar serve` anywhere under
+the temp directory, which is what a CI runner that owns the whole machine
+wants.
+
 ### Agents: MCP, skills and hooks
 
 ```sh

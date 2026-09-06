@@ -21,6 +21,14 @@ import (
 // leak is silent: the parent test passes and the stray process lives on. So
 // every isolated package also *looks*, after its tests have run, and fails the
 // run if anything is still there.
+//
+// What it may look at is bounded by ownership. The gate kills what it finds,
+// so a rule that matched more than this run started would make one suite kill
+// another's daemon and fail that run for a leak it did not cause — which is
+// what "any sonar serve under the temp directory" did on a machine running
+// several worktrees at once. Everything this run starts is under its own temp
+// root (see testenv.Root), and that is the whole of the search space unless
+// SONAR_TESTENV_GATE_ALL=1 says the machine belongs to one suite.
 
 // Daemon is one stray process left behind by this test binary.
 type Daemon struct {
@@ -72,10 +80,17 @@ func RequireNoLeakedDaemons(t testing.TB) {
 }
 
 // LeakedDaemons lists running processes that this test run should have
-// stopped: this test binary running as `serve`, and any `sonar serve` started
-// from a binary the tests built into a temp directory. Nothing installed on
-// the machine matches either shape, so a developer's own daemon is never
-// mistaken for a leak.
+// stopped: this test binary running as `serve`, and anything running `serve`
+// from an executable under this run's own temp root (Root) — which is where
+// the integration harnesses build the real binary they drive. Nothing else is
+// ever a candidate, so neither a developer's installed daemon nor another
+// `go test` sharing the machine can be mistaken for this run's leak.
+//
+// SONAR_TESTENV_GATE_ALL=1 widens the second rule back to any `sonar serve`
+// running from anywhere under the machine's temp directory. That is right on a
+// CI runner, which has one checkout and one suite and would rather over-match
+// than miss a stray daemon, and wrong on a developer's machine, where several
+// worktrees run their suites at once.
 func LeakedDaemons() []Daemon {
 	if runtime.GOOS == "windows" {
 		return nil
@@ -92,13 +107,14 @@ func LeakedDaemons() []Daemon {
 	}
 
 	self := os.Getpid()
+	gateAll := os.Getenv(gateAllEnv) == "1"
 	var leaked []Daemon
 	for _, line := range strings.Split(string(out), "\n") {
 		pid, cmdline, ok := splitPS(line)
 		if !ok || pid == self {
 			continue
 		}
-		if isDaemonOf(exe, cmdline) || isTempBuiltDaemon(cmdline) {
+		if isDaemonOf(exe, cmdline) || isRunRootDaemon(cmdline) || (gateAll && isTempBuiltDaemon(cmdline)) {
 			leaked = append(leaked, Daemon{PID: pid, Command: cmdline})
 		}
 	}
@@ -129,22 +145,61 @@ func splitPS(line string) (int, string, bool) {
 // the file name would let one package's gate fail on another package's
 // process — which is a flaky gate, and a flaky gate gets deleted.
 func isDaemonOf(exe, cmdline string) bool {
-	rest, ok := strings.CutPrefix(cmdline, exe+" ")
-	if !ok {
-		return false
-	}
-	fields := strings.Fields(rest)
-	return len(fields) > 0 && fields[0] == "serve"
+	path, ok := splitServe(cmdline)
+	return ok && path == exe
+}
+
+// isRunRootDaemon reports whether cmdline is a `serve` whose executable lives
+// under this run's temp root. Only this run puts anything there, so the name
+// of the binary does not have to be checked and another run's daemon can never
+// match.
+func isRunRootDaemon(cmdline string) bool {
+	path, ok := splitServe(cmdline)
+	return ok && runRoot != "" && under(path, runRoot)
 }
 
 // isTempBuiltDaemon reports whether cmdline is a `sonar serve` running from a
-// binary under the temp directory — which only the integration harnesses, who
-// build one there, ever produce.
+// binary anywhere under the machine's temp directory. It is the opt-in
+// machine-wide net, and it deliberately catches other runs' daemons too.
 func isTempBuiltDaemon(cmdline string) bool {
-	fields := strings.Fields(cmdline)
-	if len(fields) < 2 || fields[1] != "serve" {
+	path, ok := splitServe(cmdline)
+	if !ok {
 		return false
 	}
-	name := strings.TrimSuffix(strings.ToLower(filepath.Base(fields[0])), ".exe")
-	return name == "sonar" && under(fields[0], os.TempDir())
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".exe")
+	return name == "sonar" && under(path, machineTempDir())
+}
+
+// machineTempDir is the temp directory the machine had before Isolate pointed
+// TMPDIR at this run's root.
+func machineTempDir() string {
+	if realTemp != "" {
+		return realTemp
+	}
+	return os.TempDir()
+}
+
+// splitServe returns the executable path of a `ps` command line whose first
+// argument is `serve`, and reports whether it had that shape.
+//
+// `ps -axo command=` joins argv with single spaces and quotes nothing, so a
+// path containing spaces cannot be recovered by splitting on whitespace: an
+// executable at "/tmp/my dir/sonar" would look like the two arguments
+// "/tmp/my" and "dir/sonar". What can be recovered is the boundary — the
+// executable is everything before the first " serve" that stands as a whole
+// argument rather than as part of a longer one.
+func splitServe(cmdline string) (string, bool) {
+	const arg = " serve"
+	for i := 0; i < len(cmdline); {
+		j := strings.Index(cmdline[i:], arg)
+		if j < 0 {
+			return "", false
+		}
+		j += i
+		if end := j + len(arg); end == len(cmdline) || cmdline[end] == ' ' {
+			return cmdline[:j], true
+		}
+		i = j + 1
+	}
+	return "", false
 }
