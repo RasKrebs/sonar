@@ -83,9 +83,7 @@ func parseWindowsStats(p *ListeningPort, fields []string) {
 	if startStr != "" {
 		p.StartTime = startStr
 		// StartTime is formatted as ISO 8601 via .ToString('o') in the PowerShell command
-		if t, err := time.Parse(time.RFC3339, startStr); err == nil {
-			p.Uptime = formatDuration(time.Since(t))
-		}
+		p.Uptime = computeUptime(startStr)
 		if p.StartedAt == "" {
 			p.StartedAt = parseStartTime(startStr)
 		}
@@ -187,54 +185,67 @@ func decodeState(s string) string {
 	}
 }
 
-// computeUptime parses an lstart string and returns a human-readable duration.
+// startTimeLayouts are the shapes a process start time arrives in: `ps -o
+// lstart` (with one or two spaces before a single-digit day) and the ISO-8601
+// instant PowerShell reports on Windows.
+var startTimeLayouts = []string{
+	"Mon Jan  2 15:04:05 2006",
+	"Mon Jan 2 15:04:05 2006",
+	time.RFC3339Nano,
+	time.RFC3339,
+}
+
+// startTime parses a raw process start time. `ps` prints local time with no
+// zone, so the zoneless layouts have to be read in the local zone: parsing them
+// as UTC puts the instant a whole UTC offset away from the truth, which is how
+// `uptime` came back as "-7185s" for a process that had been up for seconds
+// while `started_at` — which already parsed in the local zone — was right.
+//
+// One parser now serves both fields, so they cannot disagree again.
+func startTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range startTimeLayouts {
+		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // parseStartTime converts a raw ps lstart string (or the ISO-8601 timestamp
 // PowerShell reports on Windows) to RFC3339. Returns "" when it cannot be
 // parsed. `started_at` in the contract is RFC3339.
 func parseStartTime(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	t, ok := startTime(raw)
+	if !ok {
 		return ""
 	}
-	layouts := []string{
-		"Mon Jan  2 15:04:05 2006",
-		"Mon Jan 2 15:04:05 2006",
-		time.RFC3339Nano,
-		time.RFC3339,
-	}
-	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
-			return t.Format(time.RFC3339)
-		}
-	}
-	return ""
+	return t.Format(time.RFC3339)
 }
 
-func computeUptime(lstart string) string {
-	// lstart format varies but common: "Wed Mar 18 10:30:00 2026"
-	layouts := []string{
-		"Mon Jan  2 15:04:05 2006",
-		"Mon Jan 2 15:04:05 2006",
-	}
+// computeUptime is how long ago a process started, rendered for a human.
+func computeUptime(lstart string) string { return computeUptimeAt(lstart, time.Now()) }
 
-	var t time.Time
-	var err error
-	for _, layout := range layouts {
-		t, err = time.Parse(layout, lstart)
-		if err == nil {
-			break
-		}
-	}
-	if err != nil {
+// computeUptimeAt is computeUptime against an explicit clock, so the conversion
+// can be tested without racing real time.
+func computeUptimeAt(lstart string, now time.Time) string {
+	t, ok := startTime(lstart)
+	if !ok {
 		return ""
 	}
-
-	d := time.Since(t)
-	return formatDuration(d)
+	return formatDuration(now.Sub(t))
 }
 
-// formatDuration returns a concise human-readable duration string.
+// formatDuration returns a concise human-readable duration string. A negative
+// duration — a clock that stepped back, or a start time a moment in the future
+// — reads as 0s rather than as a nonsense negative uptime.
 func formatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
