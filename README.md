@@ -441,6 +441,11 @@ The daemon stops on its own after 30 minutes with no clients and no
 subscribers. Set `daemon.idle_timeout` in the config file to change that, or
 `0` to keep it running.
 
+A subscriber that asks for `include: ["health"]` makes the daemon probe **every
+listening port** on a slower cadence, not only the services that declare a
+`health:` path — those are polled on every tick and reach every subscriber
+whether or not health was asked for.
+
 ### Configuration
 
 `~/.config/sonar/config.yaml` is optional; flags always win.
