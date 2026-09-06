@@ -356,3 +356,42 @@ services:
 		return seen >= 2
 	})
 }
+
+// TestCancelReachesTheRemoteStream: `stream.cancel` on the local subscription
+// id stops the work on the other machine, not just the forwarding here. The
+// wait is given a minute; if the cancel did not travel, the stream would still
+// be open when the test's own deadline runs out.
+func TestCancelReachesTheRemoteStream(t *testing.T) {
+	e := newBridgeEnv(t)
+	e.serve()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	c := e.connect(ctx)
+	register(t, ctx, c, "fake")
+
+	// A port nothing will ever listen on, so the wait runs until it is told
+	// to stop.
+	stream, err := c.Stream(ctx, "ports.wait", rpc.PortsWaitParams{
+		HostParams: rpc.HostParams{Host: "fake"},
+		Ports:      []int{freePort(t)},
+		TimeoutMs:  60_000,
+		IntervalMs: 250,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ports.wait on a remote host: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Cancel(ctx); err != nil {
+		t.Fatalf("stream.cancel: %v", err)
+	}
+	select {
+	case end := <-stream.End():
+		if end.Err != nil {
+			t.Fatalf("a cancelled stream must end cleanly, got %v", end.Err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the cancel never reached the remote stream: it is still running")
+	}
+}
