@@ -181,6 +181,69 @@ func TestPortsKillDryRunReportsAnUnknownPortAsAFailedRow(t *testing.T) {
 	}
 }
 
+// TestKillResolvesAgainstTheDaemonsOwnScan: the handler hands the killer the
+// rows it just scanned, instead of letting killer.KillPorts scan the machine a
+// second time inside the RPC. The proof is a listener that exists only in the
+// daemon's scan: a killer that went looking for itself would find nothing on
+// that port and report a failed "none" row, so a planned signal carrying the
+// snapshot's own pid and name is the daemon's scan being used.
+func TestKillResolvesAgainstTheDaemonsOwnScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	c := h.dial(ctx)
+
+	const fakePID = 424242
+	port := freeTestPort(t)
+	h.setRows(ports.ListeningPort{
+		Port: port, BindAddress: "127.0.0.1", PID: fakePID,
+		Process: "node", Display: "fake-api",
+	})
+
+	var env rpc.KillEnvelope
+	if e := c.call("ports.kill", rpc.PortsKillParams{
+		Targets: []rpc.Selector{{Port: ptr(port)}}, DryRun: true,
+	}, &env); e != nil {
+		t.Fatalf("ports.kill: %v", e)
+	}
+	if len(env.Results) != 1 {
+		t.Fatalf("results = %+v, want one row for the snapshot's listener", env.Results)
+	}
+	row := env.Results[0]
+	if row.Method == state.MethodNone {
+		t.Fatalf("row = %+v, want a planned signal: the killer resolved against its own scan, not the daemon's", row)
+	}
+	if row.PID != fakePID || row.Name != "fake-api" || row.Port != port {
+		t.Fatalf("row = %+v, want the daemon snapshot's pid %d and name fake-api on port %d",
+			row, fakePID, port)
+	}
+}
+
+// TestKillCostsExactlyOneScan pins the other half: resolving targets rescans
+// once (contract §25) and nothing scans again behind it.
+func TestKillCostsExactlyOneScan(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	c := h.dial(ctx)
+
+	h.setRows(ports.ListeningPort{Port: 4323, BindAddress: "127.0.0.1", PID: 424243, Process: "node"})
+	if _, err := h.loop.Snapshot(scanner.Include{}); err != nil {
+		t.Fatalf("priming: %v", err)
+	}
+	before := h.loop.Status().Scans
+
+	var env rpc.KillEnvelope
+	if e := c.call("ports.kill", rpc.PortsKillParams{
+		Targets: []rpc.Selector{{Port: ptr(4323)}}, DryRun: true,
+	}, &env); e != nil {
+		t.Fatalf("ports.kill: %v", e)
+	}
+	if after := h.loop.Status().Scans; after != before+1 {
+		t.Errorf("scans = %d, want exactly one (target resolution) more than %d", after, before)
+	}
+}
+
 func TestGroupsKillReportsAnUnknownGroupAsNotFound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

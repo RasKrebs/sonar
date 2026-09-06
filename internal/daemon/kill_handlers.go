@@ -7,6 +7,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/killer"
+	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/scanner"
 	"github.com/raskrebs/sonar/internal/state"
 )
@@ -50,6 +51,7 @@ func handlePortsKill(ctx context.Context, req *Request) (any, error) {
 		Grace:    time.Duration(p.GraceMs) * time.Millisecond,
 		Escalate: p.Escalate,
 		DryRun:   p.DryRun,
+		Ports:    killerRows(snap),
 	}
 	rows := killer.KillPorts(ctx, targets, opts)
 	afterKill(req, opts.DryRun)
@@ -84,6 +86,7 @@ func handleGroupsKill(ctx context.Context, req *Request) (any, error) {
 		Force:  p.Force,
 		Grace:  time.Duration(p.GraceMs) * time.Millisecond,
 		DryRun: p.DryRun,
+		Ports:  killerRows(snap),
 	}
 	rows := killer.KillPorts(ctx, targets, opts)
 	afterKill(req, opts.DryRun)
@@ -116,6 +119,25 @@ func killSnapshot(req *Request) (state.Snapshot, error) {
 			"check `sonar daemon log` for the scanner error")
 	}
 	return snap, nil
+}
+
+// killerRows hands the killer the scan the handler just took.
+//
+// Without it killer.KillPorts scans the machine again from inside the RPC, so
+// one `ports.kill` cost two full scans: the §25 rescan-before-select and the
+// killer's own. The second one is pure duplication — the rows are the same
+// enriched pipeline (ports.Scan + Docker + Enrich) the daemon's scanner ran a
+// moment earlier — and it is what made a dry run of an unknown port take
+// seconds. Every other caller of the killer (`sonar kill`, `kill-all`, `down`)
+// already passes the snapshot it resolved its targets against; the daemon now
+// does the same, which is also what keeps the two paths' output identical.
+func killerRows(snap state.Snapshot) []ports.ListeningPort {
+	rows := state.ToListeningAll(snap.Ports)
+	if rows == nil {
+		// Never nil: a nil slice tells the killer to go and scan for itself.
+		rows = []ports.ListeningPort{}
+	}
+	return rows
 }
 
 // selectorTarget validates one wire selector and turns it into a killer target.
