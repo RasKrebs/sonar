@@ -233,7 +233,6 @@ func (f *Fake) portReady(rows []state.Port, port int, wantHTTP bool) bool {
 	return false
 }
 
-
 // handlePortsHealth answers from each row's fixture health. A port nothing is
 // listening on still gets a row — the daemon's rule, so a caller asking about a
 // fixed list never has to match up indexes — and it reads as a refused probe.
