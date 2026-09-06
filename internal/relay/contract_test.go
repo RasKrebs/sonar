@@ -151,6 +151,45 @@ func TestNormalizeProject(t *testing.T) {
 	}
 }
 
+// The five generic names from the milestone 5 telemetry contract, with the
+// props the desktop actually sends. If one of these stops validating, the
+// desktop client is broken and nothing else will say so.
+func TestValidateBatchAcceptsTheGenericContractEvents(t *testing.T) {
+	tests := []struct {
+		name  string
+		props map[string]any
+	}{
+		{"onboarding_step", map[string]any{"step": "agents", "outcome": "skipped"}},
+		{"view", map[string]any{"name": "ports"}},
+		{"action", map[string]any{"name": "kill", "host_kind": "remote", "outcome": "ok"}},
+		{"settings_change", map[string]any{"key": "telemetry_enabled"}},
+		{"interest", map[string]any{"surface": "account"}},
+		{"error", map[string]any{"where": "onboarding", "code": "daemon_unreachable"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := baseBatch()
+			b.Events = []Event{{Name: tc.name, Props: tc.props}}
+			if err := ValidateBatch(&b, testNow); err != nil {
+				t.Fatalf("%s %v was rejected: %v", tc.name, tc.props, err)
+			}
+		})
+	}
+}
+
+func TestEventNamesCoverTheMilestone5Contract(t *testing.T) {
+	// The contract's own list, verbatim. It is a subset, not the whole set:
+	// the CLI and daemon add specific names on top.
+	for _, n := range []string{
+		"app_open", "app_close", "onboarding_step", "view",
+		"action", "error", "settings_change", "interest",
+	} {
+		if !KnownEventName(n) {
+			t.Errorf("the telemetry contract names %q and the relay refuses it", n)
+		}
+	}
+}
+
 func TestEventNamesAreUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for _, n := range EventNames {

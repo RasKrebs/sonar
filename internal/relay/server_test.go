@@ -147,6 +147,28 @@ func TestPostEventsUnknownFieldsAreIgnored(t *testing.T) {
 	}
 }
 
+func TestPostEventsAcceptsSentAt(t *testing.T) {
+	// `sent_at` is in the milestone 5 contract's body but means nothing to the
+	// relay, which stamps its own received_at. It has to be accepted and
+	// ignored rather than rejected as an unknown field — that is the whole
+	// forward-compatibility rule, pinned on the one field known to exercise it.
+	s, store := newTestServer(t, Options{})
+	body := `{"install_id":"8f14e45f-ceea-467a-9c1b-2f0e1d3a4b5c","app_version":"v0.6.0",` +
+		`"os":"darwin","arch":"arm64","sent_at":"2026-09-06T12:00:04Z",` +
+		`"events":[{"name":"view","props":{"name":"ports"}}]}`
+	rec := post(t, s, body, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("a batch with sent_at = %d (%s), want 202", rec.Code, rec.Body.String())
+	}
+	st, err := store.Stats(context.Background(), StatsQuery{}, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Events) != 1 || st.Events[0].Name != "view" {
+		t.Fatalf("events = %+v, want the view event stored", st.Events)
+	}
+}
+
 func TestProjectHeader(t *testing.T) {
 	s, store := newTestServer(t, Options{})
 	if rec := post(t, s, okBody, map[string]string{"X-Sonar-Project": "acme-eu"}); rec.Code != http.StatusAccepted {

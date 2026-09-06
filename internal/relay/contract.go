@@ -41,14 +41,20 @@ const MaxClockSkew = 24 * time.Hour
 //	  "daemon_version": "v0.6.0",
 //	  "os": "darwin",
 //	  "arch": "arm64",
+//	  "sent_at": "2026-09-06T09:12:04Z",
 //	  "events": [
-//	    {"name": "app_open", "at": "2026-09-06T09:12:00Z", "props": {"pane": "ports"}}
+//	    {"name": "view", "at": "2026-09-06T09:12:00Z", "props": {"name": "ports"}}
 //	  ]
 //	}
 //
 // Unknown fields are ignored rather than rejected, at both levels: a newer
 // client must keep working against an older relay, which is the whole point of
 // running the relay as a separate release train.
+//
+// `sent_at` is one of those ignored fields, deliberately. The desktop sends it
+// because the contract lists it, and the relay has no use for it: it stamps
+// its own received_at on arrival and trusts nothing a client says about when
+// it spoke. Dropping it silently is the correct handling, not an oversight.
 type Batch struct {
 	InstallID     string  `json:"install_id"`
 	AppVersion    string  `json:"app_version,omitempty"`
@@ -85,7 +91,23 @@ func (e Event) PropsJSON() string {
 //
 // Adding a name is a relay release followed by a client release, in that
 // order. Removing one is never done — an old install keeps sending it.
+//
+// The list has two halves. The first five are the *generic* names the desktop
+// emits (roadmap milestone 5's telemetry contract): a whole product fits in
+// them because the specificity lives in props, so shipping a new view or a new
+// action never needs a relay release. The rest are the specific names the CLI
+// and daemon side use, where there is no view or action to name. New desktop
+// instrumentation belongs in the generic five; reach for a specific name only
+// when neither framing fits.
 var EventNames = []string{
+	// Generic (desktop, milestone 5 contract).
+	"onboarding_step", // {step, outcome}
+	"view",            // {name}
+	"action",          // {name, host_kind: local|remote, outcome}
+	"settings_change", // {key} — never the value
+	"interest",        // {surface} — an IsBuilding surface was clicked
+
+	// Specific (CLI, daemon, lifecycle).
 	"app_open",
 	"app_close",
 	"app_update",

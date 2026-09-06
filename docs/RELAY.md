@@ -134,12 +134,17 @@ and, when the relay has keys, `X-Sonar-Key` or `Authorization: Bearer`.
   "daemon_version": "v0.6.0",
   "os": "darwin",
   "arch": "arm64",
+  "sent_at": "2026-09-06T09:12:04Z",
   "events": [
-    {"name": "app_open", "at": "2026-09-06T09:12:00Z", "props": {"pane": "ports"}},
-    {"name": "group_up", "props": {"services": 3}}
+    {"name": "view", "at": "2026-09-06T09:12:00Z", "props": {"name": "ports"}},
+    {"name": "action", "props": {"name": "kill", "host_kind": "local", "outcome": "ok"}}
   ]
 }
 ```
+
+`sent_at` is accepted and ignored. The relay stamps its own `received_at` and
+trusts nothing a client says about when it spoke; the field is in the contract
+so the desktop can send it, and dropping it is the correct handling.
 
 `202` with `{"accepted": 2}`. Every 4xx is `{"error": "<code>", "reason": "…"}`,
 where the reason names the field and the rule it broke:
@@ -222,6 +227,55 @@ value.
 Unknown fields are ignored at both levels, so a newer client keeps working
 against an older relay. That is the point of the relay having its own release
 train.
+
+### Event names
+
+Two halves. The **generic** five are what the desktop emits: a whole product
+fits in them because the specificity lives in props, so shipping a new view or
+a new action never needs a relay release. The **specific** names are for the
+CLI and daemon side, where there is no view or action to name. New desktop
+instrumentation belongs in the generic five; reach for a specific name only
+when neither framing fits.
+
+Props are a suggestion the client is expected to keep — the relay enforces the
+*shape* rules above, not this column. Nothing here may carry a hostname, a
+path, a process name, a command line or a port; counts and enums only.
+
+**Generic**
+
+| Name | Props | Emitted when |
+| --- | --- | --- |
+| `onboarding_step` | `step`, `outcome` (`completed`/`skipped`/`failed`) | An onboarding step ends |
+| `view` | `name` | A view is opened |
+| `action` | `name`, `host_kind` (`local`/`remote`), `outcome` | A user action completes |
+| `settings_change` | `key` — never the value | A setting is changed |
+| `interest` | `surface` | An `IsBuilding` surface is clicked |
+
+**Specific**
+
+| Name | Props | Emitted when |
+| --- | --- | --- |
+| `app_open` / `app_close` | — | The app starts or exits |
+| `app_update` | `from`, `to` | The app replaced itself |
+| `daemon_start` / `daemon_stop` | — | The daemon's lifecycle |
+| `scan` | `ports`, `ms` | A port scan finished |
+| `port_killed` | `signal`, `outcome` | A listener was killed |
+| `service_start` / `service_stop` | `outcome` | One service in a group |
+| `group_up` / `group_down` | `services`, `outcome` | A group was brought up or down |
+| `rename` / `assign` | — | A port was renamed or grouped |
+| `map_created` | — | A port map was added |
+| `remote_add` / `remote_install` | `outcome` | A remote host was registered or installed onto |
+| `host_switch` | `host_kind` | The host switcher moved |
+| `mcp_tool_call` | `tool`, `outcome` | An agent called an MCP tool |
+| `hook_fired` | `hook` | A Claude Code hook ran |
+| `skill_installed` | `scope` | `sonar install skills` ran |
+| `update_check` / `update_applied` | `outcome` | The CLI self-update path |
+| `expose_start` / `expose_stop` | `provider`, `outcome` | Milestone 4, not emitted yet |
+| `sign_in` | `outcome` | Milestone 4, not emitted yet |
+| `error` | `where`, `code` | Anything failed in a way worth counting |
+
+`internal/relay/contract.go` holds the list; this table is the prose copy. A
+name that is not on it is a `400`.
 
 ## Storage
 
