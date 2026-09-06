@@ -390,6 +390,13 @@ func ForwardTo(ctx context.Context, req *Request, host, method string, params js
 			"no remote host named "+host,
 			"this daemon has no remote support built in")
 	}
+	if !r.Known(host) {
+		// A typo must not look like an empty machine, and it must not look
+		// like an internal error either.
+		return nil, rpc.NewError(rpc.CodeNotFound,
+			"no remote host named "+host,
+			"`sonar remote list` shows the registered hosts; `sonar remote add <user@host>` adds one")
+	}
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
 	}

@@ -256,6 +256,18 @@ func TestForwardToUnknownHostWithoutARouter(t *testing.T) {
 	}
 }
 
+func TestForwardToAnUnregisteredHostIsNotFound(t *testing.T) {
+	withRouter(t, "hetzner")
+	_, err := ForwardTo(context.Background(), &Request{}, "berlin", "ports.list", nil)
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Data.Code != "not_found" {
+		t.Fatalf("err = %v, want not_found", err)
+	}
+	if !strings.Contains(err.Error(), "berlin") {
+		t.Errorf("err = %v, want it to name the host", err)
+	}
+}
+
 func TestForwardToReturnsTheRemoteResult(t *testing.T) {
 	r := withRouter(t, "hetzner")
 	r.reply = json.RawMessage(`{"ports":[{"host":"localhost","port":3000,"pid":8123456}]}`)
