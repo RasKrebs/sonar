@@ -62,7 +62,7 @@ For other services, opens a raw TCP connection to the port.`,
 func init() {
 	attachCmd.Flags().StringVar(&attachShell, "shell", "", "Shell to use for Docker exec (default: auto-detect sh/bash)")
 	attachCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
-	addHostFlag(attachCmd, "Refused: attach is a terminal on this machine, so ssh there and attach locally")
+	addHostFlag(attachCmd, "Refused for a remote `host`: attach is a terminal on this machine, so ssh there and attach locally")
 	rootCmd.AddCommand(attachCmd)
 }
 

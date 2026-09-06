@@ -55,7 +55,9 @@ func init() {
 		"Read a registered `host` through the daemon, \"*\" for every host, or scan any user@hostname over SSH")
 	_ = listCmd.RegisterFlagCompletionFunc("host",
 		func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-			return remoteHostNames(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+			// Only `list` reads every host at once, so only `list` offers it.
+			return append([]string{allHosts}, remoteHostNames(cmd.Context())...),
+				cobra.ShellCompDirectiveNoFileComp
 		})
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
