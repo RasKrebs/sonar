@@ -120,8 +120,8 @@ func TestToolsListAdvertisesTheReadTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		byName[tool.Name] = tool
 	}
-	// The tool set is the sum of the tools_*.go files, so this asserts what the
-	// read tools promise rather than how many tools the server has in total.
+	// Other slices add their own tools to the same server, so this asserts
+	// what the read tools promise rather than how many tools exist.
 	for _, name := range []string{"list_ports", "inspect_port"} {
 		tool, ok := byName[name]
 		if !ok {
