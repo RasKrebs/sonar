@@ -50,6 +50,8 @@ Call this before you act on a port you did not start. It answers the only questi
 
 If the port is bound by more than one process the call reports it as ambiguous; pass the pid from list_ports to pick one.`
 
+func init() { registerTools((*Server).addReadTools) }
+
 func (s *Server) addReadTools() {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name:        "list_ports",

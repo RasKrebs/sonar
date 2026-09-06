@@ -98,8 +98,23 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		log:        log,
 		ownsDaemon: owns,
 	}
-	s.addReadTools()
+	for _, register := range toolRegistrars {
+		register(s)
+	}
 	return s, nil
+}
+
+// toolRegistrars holds one function per tools_*.go file, each adding that
+// file's tools to a new server. The list exists so a file can own its tools
+// end to end — schema, description, handler and registration — instead of
+// naming them here as well: the tool set is the sum of the files, and two
+// slices adding tools in parallel never touch the same line.
+var toolRegistrars []func(*Server)
+
+// registerTools adds a file's registrar. Call it from an init in the file that
+// declares the tools.
+func registerTools(register func(*Server)) {
+	toolRegistrars = append(toolRegistrars, register)
 }
 
 // MCP exposes the underlying server so later slices can add resources and
