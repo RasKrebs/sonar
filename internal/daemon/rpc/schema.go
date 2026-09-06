@@ -26,7 +26,44 @@ type Description struct {
 	End    any
 }
 
+// NotificationDescription is one server-pushed message's wire contract: the
+// notification's method name and the type of its params. Notifications have no
+// id and no result — nothing replies to them — so params is all there is.
+type NotificationDescription struct {
+	Method string
+	Params any
+}
+
 var registry = map[string]Description{}
+
+var notificationRegistry = map[string]NotificationDescription{}
+
+// DescribeNotification registers a notification the daemon pushes. Without
+// this the schema described only the request/response half of the protocol and
+// every client had to hand-write `state.delta`, `state.event`, `stream.chunk`
+// and `stream.end` (contract §1).
+func DescribeNotification(method string, params any) {
+	notificationRegistry[method] = NotificationDescription{Method: method, Params: params}
+}
+
+// Notifications returns a copy of the notification registry.
+func Notifications() map[string]NotificationDescription {
+	out := make(map[string]NotificationDescription, len(notificationRegistry))
+	for k, v := range notificationRegistry {
+		out[k] = v
+	}
+	return out
+}
+
+// NotificationNames returns every registered notification name, sorted.
+func NotificationNames() []string {
+	names := make([]string, 0, len(notificationRegistry))
+	for k := range notificationRegistry {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // Describe registers a method's wire contract. Called from init() here for the
 // core namespaces; the packages that own the expose, map, sessions and claims
@@ -68,16 +105,23 @@ type MethodSchema struct {
 	StreamEnd   json.RawMessage `json:"stream_end,omitempty"`
 }
 
+// NotificationSchema is one entry of the document's notifications map: the
+// params a client decodes when that notification arrives.
+type NotificationSchema struct {
+	Params json.RawMessage `json:"params"`
+}
+
 // Document is the bundle `sonar daemon schema` prints and
 // docs/schema/protocol.schema.json holds (contract §6).
 type Document struct {
-	Schema          string                     `json:"$schema"`
-	ID              string                     `json:"$id"`
-	Title           string                     `json:"title"`
-	Description     string                     `json:"description"`
-	ProtocolVersion string                     `json:"protocol_version"`
-	Definitions     map[string]json.RawMessage `json:"definitions"`
-	Methods         map[string]MethodSchema    `json:"methods"`
+	Schema          string                        `json:"$schema"`
+	ID              string                        `json:"$id"`
+	Title           string                        `json:"title"`
+	Description     string                        `json:"description"`
+	ProtocolVersion string                        `json:"protocol_version"`
+	Definitions     map[string]json.RawMessage    `json:"definitions"`
+	Methods         map[string]MethodSchema       `json:"methods"`
+	Notifications   map[string]NotificationSchema `json:"notifications"`
 }
 
 // namedTypes are the data-model definitions contract §6 requires by name.
@@ -91,6 +135,10 @@ func namedTypes() []any {
 		state.Stats{}, state.Health{}, state.Docker{}, state.Run{},
 		state.KillResult{},
 		Error{}, MutationResult{}, KillEnvelope{},
+		// The streaming envelopes (contract §1). A client needs the shape of
+		// {id, data} to read any stream at all, so it is a named definition
+		// rather than something every generator re-invents.
+		StreamChunk{}, StreamEnd{}, StreamStart{},
 	}
 }
 
@@ -112,6 +160,11 @@ func BuildSchema() *Document {
 		}
 	}
 
+	notifications := make(map[string]NotificationSchema, len(notificationRegistry))
+	for name, d := range notificationRegistry {
+		notifications[name] = NotificationSchema{Params: b.add(d.Params)}
+	}
+
 	return &Document{
 		Schema:          "https://json-schema.org/draft/2020-12/schema",
 		ID:              "https://github.com/raskrebs/sonar/docs/schema/protocol.schema.json",
@@ -120,6 +173,7 @@ func BuildSchema() *Document {
 		ProtocolVersion: ProtocolVersion,
 		Definitions:     b.defs,
 		Methods:         methods,
+		Notifications:   notifications,
 	}
 }
 
@@ -286,4 +340,13 @@ func init() {
 	Describe("map.stop", MapStopParams{}, MapStopResult{}, nil, nil)
 	Describe("map.list", Empty{}, MapListResult{}, nil, nil)
 	Describe("map.requests", MapRequestsParams{}, MapRequestsResult{}, MapRequestsChunk{}, MapRequestsEnd{})
+
+	// Notifications the daemon pushes (contract §1). state.subscribe keeps its
+	// own broadcast names; every streaming method shares stream.chunk and
+	// stream.end, whose `data` is the chunk or end type of the method that
+	// opened the stream.
+	DescribeNotification(MethodStateDelta, state.Delta{})
+	DescribeNotification(MethodStateEvent, state.Event{})
+	DescribeNotification(MethodStreamChunk, StreamChunk{})
+	DescribeNotification(MethodStreamEnd, StreamEnd{})
 }

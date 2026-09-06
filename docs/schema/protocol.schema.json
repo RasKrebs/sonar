@@ -3063,6 +3063,19 @@
         "id"
       ]
     },
+    "StreamChunk": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "data": true
+      },
+      "type": "object",
+      "required": [
+        "id",
+        "data"
+      ]
+    },
     "StreamEnd": {
       "properties": {
         "id": {
@@ -3619,6 +3632,28 @@
       },
       "result": {
         "$ref": "#/definitions/OKResult"
+      }
+    }
+  },
+  "notifications": {
+    "state.delta": {
+      "params": {
+        "$ref": "#/definitions/Delta"
+      }
+    },
+    "state.event": {
+      "params": {
+        "$ref": "#/definitions/Event"
+      }
+    },
+    "stream.chunk": {
+      "params": {
+        "$ref": "#/definitions/StreamChunk"
+      }
+    },
+    "stream.end": {
+      "params": {
+        "$ref": "#/definitions/StreamEnd"
       }
     }
   }

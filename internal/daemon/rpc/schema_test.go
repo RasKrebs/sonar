@@ -159,3 +159,66 @@ func assertEnum(t *testing.T, raw json.RawMessage, want []string) {
 		}
 	}
 }
+
+// contractNotifications is every message the daemon pushes without being asked
+// (contract §1). They are half the protocol, and until they were described a
+// client had to hand-write them from prose.
+var contractNotifications = []string{
+	"state.delta", "state.event", "stream.chunk", "stream.end",
+}
+
+func TestEveryNotificationIsDescribed(t *testing.T) {
+	got := Notifications()
+	for _, n := range contractNotifications {
+		if _, ok := got[n]; !ok {
+			t.Errorf("notification %q is in the contract but not described", n)
+		}
+	}
+	if names := NotificationNames(); len(names) != len(got) {
+		t.Errorf("NotificationNames returned %d of %d notifications", len(names), len(got))
+	}
+}
+
+// TestSchemaCarriesNotificationsAndTheStreamEnvelope: a generator reading the
+// document alone must be able to type every inbound message, envelope included.
+func TestSchemaCarriesNotificationsAndTheStreamEnvelope(t *testing.T) {
+	var m map[string]any
+	if err := json.Unmarshal(Marshal(), &m); err != nil {
+		t.Fatal(err)
+	}
+
+	notifications, ok := m["notifications"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema has no notifications map")
+	}
+	for _, name := range contractNotifications {
+		entry, ok := notifications[name].(map[string]any)
+		if !ok {
+			t.Errorf("notifications[%q] missing from schema", name)
+			continue
+		}
+		if _, ok := entry["params"]; !ok {
+			t.Errorf("notifications[%q] has no params schema", name)
+		}
+	}
+
+	defs, ok := m["definitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema has no definitions map")
+	}
+	for _, name := range []string{"StreamChunk", "StreamEnd", "StreamStart"} {
+		if _, ok := defs[name]; !ok {
+			t.Errorf("definition %q missing; a client cannot read a stream without it", name)
+		}
+	}
+
+	chunk, ok := defs["StreamChunk"].(map[string]any)["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("StreamChunk definition has no properties")
+	}
+	for _, prop := range []string{"id", "data"} {
+		if _, ok := chunk[prop]; !ok {
+			t.Errorf("StreamChunk has no %q property", prop)
+		}
+	}
+}
