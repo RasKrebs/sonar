@@ -238,10 +238,22 @@ type Loop struct {
 	// re-attributes it instead of scanning the machine again, which is what
 	// makes a rename or a `.sonar.yaml` write cost microseconds rather than a
 	// full scan (contract §44).
-	lastPorts    []ports.ListeningPort
-	haveSnap     bool
+	lastPorts []ports.ListeningPort
+	haveSnap  bool
+
+	// scanSeq numbers scans in the order their OS half begins, and
+	// committedSeq is the number of the scan the published snapshot came
+	// from. Both are counters rather than timestamps on purpose: "did a scan
+	// begin after I asked" and "is this scan older than the one already
+	// published" are happens-before questions, and a clock cannot answer
+	// them. `time.Now` on Windows moves in steps of up to about 15 ms, so two
+	// events milliseconds apart read as simultaneous — which made a kill's
+	// rescan coalesce onto the scan that had *just* finished and resolve its
+	// targets against the very snapshot §17 says it must not use.
+	scanSeq      uint64
+	committedSeq uint64
+
 	lastScanAt   time.Time
-	lastScanFrom time.Time
 	lastHealthAt time.Time
 	interval     time.Duration
 	seq          uint64
@@ -502,6 +514,11 @@ func (l *Loop) Run(ctx context.Context) {
 		// every `sonar list` that missed the cache and every write woke the
 		// loop into a second full scan, which is one more scan for the next
 		// caller to be queued behind (contract §44).
+		//
+		// The floor is the *loop's* cadence and nothing else. A handler that
+		// asks for a scan gets one: Rescan is a forced scan (see scanMode)
+		// and never consults this, because a kill resolving its selectors
+		// against the previous tick is the bug §17 exists to prevent.
 		wait := l.dueIn()
 		if wait <= 0 {
 			l.scanAndPublish(include)
@@ -575,7 +592,7 @@ func (l *Loop) scanLocked(collect, carry Include) (next, prev state.Snapshot, ch
 	subs, _ := l.opts.Demand()
 	wantHealth := collect.Health && l.healthDue()
 
-	startedAt := l.now()
+	gen := l.beginScan()
 	pp, err := l.opts.Scan(collect)
 	if err != nil {
 		l.mu.Lock()
@@ -621,16 +638,16 @@ func (l *Loop) scanLocked(collect, carry Include) (next, prev state.Snapshot, ch
 	defer l.commitMu.Unlock()
 
 	next, prev, changed = l.commitScan(commit{
-		subs:      subs,
-		collect:   collect,
-		carry:     carry,
-		health:    wantHealth,
-		startedAt: startedAt,
-		pp:        pp,
-		rows:      rows,
-		groups:    groupRows,
-		sessions:  sessionRows,
-		host:      host,
+		subs:     subs,
+		collect:  collect,
+		carry:    carry,
+		health:   wantHealth,
+		seq:      gen,
+		pp:       pp,
+		rows:     rows,
+		groups:   groupRows,
+		sessions: sessionRows,
+		host:     host,
 	})
 	if changed {
 		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
@@ -640,16 +657,17 @@ func (l *Loop) scanLocked(collect, carry Include) (next, prev state.Snapshot, ch
 
 // commit is one finished scan on its way into the cache.
 type commit struct {
-	subs      int
-	collect   Include
-	carry     Include
-	health    bool
-	startedAt time.Time
-	pp        []ports.ListeningPort
-	rows      []state.Port
-	groups    []state.Group
-	sessions  []state.SessionRecord
-	host      state.Host
+	subs    int
+	collect Include
+	carry   Include
+	health  bool
+	// seq is the number this scan took when its OS half began.
+	seq      uint64
+	pp       []ports.ListeningPort
+	rows     []state.Port
+	groups   []state.Group
+	sessions []state.SessionRecord
+	host     state.Host
 }
 
 // commitScan swaps a finished scan into the cache and adapts the interval.
@@ -665,7 +683,7 @@ func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 
 	l.scans++
 	l.lastErr = nil
-	if l.haveSnap && c.startedAt.Before(l.lastScanFrom) {
+	if l.haveSnap && c.seq < l.committedSeq {
 		// Superseded. This scan asked the OS what was listening before the
 		// snapshot on the wire was captured, so committing it would put back
 		// ports a newer scan has already seen go — the "no going backwards"
@@ -691,7 +709,7 @@ func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 	withStats := c.collect.Stats || c.carry.Stats
 
 	l.lastScanAt = l.now()
-	l.lastScanFrom = c.startedAt
+	l.committedSeq = c.seq
 	l.lastPorts = c.pp
 	if c.health {
 		l.lastHealthAt = l.lastScanAt
@@ -1013,7 +1031,7 @@ func (l *Loop) SnapshotAll(include Include) (state.Snapshot, error) {
 	if snap, ok := l.cached(include); ok {
 		return snap, nil
 	}
-	return l.scanNow(include)
+	return l.scanNow(include, mayCoalesce)
 }
 
 // Rescan scans now whatever the cache says, publishes the change it finds and
@@ -1029,7 +1047,7 @@ func (l *Loop) SnapshotAll(include Include) (state.Snapshot, error) {
 // later. Rescan closes the window by holding scanMu across both halves.
 func (l *Loop) Rescan(include Include) (state.Snapshot, error) {
 	defer l.Wake()
-	snap, err := l.scanNow(include)
+	snap, err := l.scanNow(include, forceScan)
 	return localOnly(snap), err
 }
 
@@ -1138,15 +1156,29 @@ func (l *Loop) localhostRow(hosts []state.Host) state.Host {
 	return l.identityRow()
 }
 
+// scanMode says whether a caller may be given somebody else's scan.
+type scanMode bool
+
+const (
+	// mayCoalesce is the read path. A scan that *began* after this call did
+	// saw everything this caller could have seen, so waiting for the one in
+	// flight and then running a second is pure duplication.
+	mayCoalesce scanMode = false
+	// forceScan is the write and kill path. `ports.kill` and `groups.kill`
+	// resolve their selectors against the scan they ask for (contract §17,
+	// §25) and a write's fallback republish has to see its own change, so
+	// these always scan — never the one that happened to be in flight, and
+	// never the one that finished a moment ago.
+	forceScan scanMode = true
+)
+
 // scanNow is the uncached half of both: one scan under the run gate, published
 // before it returns.
-//
-// A scan that *started* after this call did is already the answer — it saw
-// everything this caller could have seen — so waiting for the one in flight
-// and then running a second is pure duplication. Coalescing onto it is what
-// keeps `ports.kill` to one scan's wait rather than two (contract §44).
-func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
-	asked := l.now()
+func (l *Loop) scanNow(include Include, mode scanMode) (state.Snapshot, error) {
+	// Sampled before the gate: any scan that begins while this call waits
+	// takes a higher number, which is what "began after I asked" means
+	// without consulting a clock.
+	asked := l.scanGeneration()
 	if !lockFor(l.rpcGate, ScanLockBudget) {
 		// Wedged: the last good snapshot beats a reply that never comes.
 		l.opts.Logger.Warn("scanner busy, serving the last snapshot", "waited", ScanLockBudget)
@@ -1154,8 +1186,10 @@ func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
 	}
 	defer unlock(l.rpcGate)
 
-	if snap, ok := l.scannedSince(asked, include); ok {
-		return snap, nil
+	if mode == mayCoalesce {
+		if snap, ok := l.scannedSince(asked, include); ok {
+			return snap, nil
+		}
 	}
 
 	next, prev, _, err := l.scanLocked(include, l.demandInclude())
@@ -1169,17 +1203,41 @@ func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
 	return next, nil
 }
 
-// scannedSince reports the cached snapshot when a scan that began at or after
-// t has already committed one that carries what the caller asked for. Health
-// never coalesces: the probes run on their own cadence, so "a scan happened"
-// says nothing about whether it probed.
-func (l *Loop) scannedSince(t time.Time, include Include) (state.Snapshot, bool) {
+// beginScan numbers a scan as its OS half starts.
+func (l *Loop) beginScan() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.scanSeq++
+	return l.scanSeq
+}
+
+// scanGeneration is the number of the last scan to have begun.
+func (l *Loop) scanGeneration() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.scanSeq
+}
+
+// scannedSince reports the cached snapshot when a scan that began strictly
+// after generation gen has already committed one carrying what the caller
+// asked for.
+//
+// Strictly after, and counted rather than timed: a scan numbered gen is the
+// one that was already running (or had just finished) when the caller asked,
+// and serving its result would be serving state from before the call. That
+// distinction is invisible to `time.Now` on a platform whose clock moves in
+// milliseconds, which is how a kill's rescan came to be skipped on Windows and
+// nowhere else.
+//
+// Health never coalesces either way: the probes run on their own cadence, so
+// "a scan happened" says nothing about whether it probed.
+func (l *Loop) scannedSince(gen uint64, include Include) (state.Snapshot, bool) {
 	if include.Health {
 		return state.Snapshot{}, false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !l.haveSnap || l.lastScanFrom.Before(t) {
+	if !l.haveSnap || l.committedSeq <= gen {
 		return state.Snapshot{}, false
 	}
 	if include.Stats && !l.snapHasStats() {

@@ -277,3 +277,102 @@ func TestConfiguredHealthRoundIsBudgeted(t *testing.T) {
 		t.Fatal("the first probe should still have run and landed")
 	}
 }
+
+// TestRescanAlwaysScansOnAStoppedClock is the Windows regression from PR #75.
+//
+// Coalescing used to ask "did a scan begin after I asked?" with timestamps.
+// `time.Now` on Windows moves in steps of up to about 15 ms, so the scan that
+// had *just* finished read as having begun at the same instant as the call
+// that followed it, and a kill's rescan was answered with the snapshot it was
+// explicitly not allowed to use (contract §17, §25). The clock is stopped here
+// on purpose: that is the coarsest clock there is, and the rescan must still
+// scan on it.
+func TestRescanAlwaysScansOnAStoppedClock(t *testing.T) {
+	frozen := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	var scans atomic.Int64
+	l := New(Options{
+		HostStats:     fixedHost,
+		DaemonVersion: "test",
+		Now:           func() time.Time { return frozen },
+		Scan: func(Include) ([]ports.ListeningPort, error) {
+			scans.Add(1)
+			return []ports.ListeningPort{{Port: 8123, PID: 42, Process: "python3"}}, nil
+		},
+	})
+
+	if _, err := l.Snapshot(Include{}); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := scans.Load(); got != 1 {
+		t.Fatalf("scans after priming = %d, want 1", got)
+	}
+
+	for i := 2; i <= 4; i++ {
+		if _, err := l.Rescan(Include{}); err != nil {
+			t.Fatalf("Rescan: %v", err)
+		}
+		if got := scans.Load(); got != int64(i) {
+			t.Fatalf("scans after Rescan %d = %d, want %d: a forced scan never coalesces", i-1, got, i)
+		}
+	}
+}
+
+// TestReadCoalescesOntoAScanThatBeganAfterIt is the other side of the same
+// counter: the read path may be handed the result of a scan that demonstrably
+// started after it asked, and may not be handed the one that was already
+// running. Neither answer depends on the clock.
+func TestReadCoalescesOntoAScanThatBeganAfterIt(t *testing.T) {
+	frozen := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var scans atomic.Int64
+
+	l := New(Options{
+		HostStats:     fixedHost,
+		DaemonVersion: "test",
+		Now:           func() time.Time { return frozen },
+		Scan: func(inc Include) ([]ports.ListeningPort, error) {
+			scans.Add(1)
+			if inc.Stats {
+				close(entered)
+				<-release
+			}
+			return []ports.ListeningPort{{Port: 8123, PID: 42, Process: "python3"}}, nil
+		},
+	})
+
+	// A read that arrives while the tick's scan is in flight must not be
+	// served by it: that scan began first.
+	go l.scanAndPublish(Include{Stats: true})
+	<-entered
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := l.Snapshot(Include{}); err != nil {
+			t.Errorf("Snapshot: %v", err)
+		}
+	}()
+	close(release)
+	<-done
+	if got := scans.Load(); got != 2 {
+		t.Fatalf("scans = %d, want the read to scan for itself rather than take the one already running", got)
+	}
+
+	// A second read behind the first coalesces onto it: it began later.
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := l.Rescan(Include{}); err != nil {
+				t.Errorf("Rescan: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	// Four forced rescans are four scans; the point of this half is only that
+	// the counter, not the clock, is what decides.
+	if got := scans.Load(); got != 6 {
+		t.Fatalf("scans = %d, want each forced rescan to scan", got)
+	}
+}
