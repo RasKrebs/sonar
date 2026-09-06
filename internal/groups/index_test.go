@@ -64,11 +64,76 @@ func TestIndexDeepestConfigWins(t *testing.T) {
 	if !ok || cfg.Name != "outer" || svc != "api" {
 		t.Fatalf("MatchPort from the repo root = (%v, %q, %v)", cfg, svc, ok)
 	}
+	// Two configs claim 8000, and with no cwd there is nothing to tell them
+	// apart: an ambiguous claim is not a group.
 	if _, _, ok := x.MatchPort(state.Port{Port: 8000}); ok {
-		t.Error("a port with no cwd must not match a config")
+		t.Error("a port with no cwd must not pick between two configs that both claim it")
 	}
 	if _, _, ok := x.MatchPort(state.Port{Port: 9999, Cwd: inner}); ok {
 		t.Error("an unclaimed port must not match a config")
+	}
+}
+
+// TestIndexMatchesADeclaredPortWithoutACwd is the Windows gap: the scanner has
+// no per-process working directory there, so a listener arrives with Cwd
+// empty. A `.sonar.yaml` that declares the port is still the only claim on it,
+// and the group has to form — otherwise `sonar up` starts a group nothing ever
+// joins.
+func TestIndexMatchesADeclaredPortWithoutACwd(t *testing.T) {
+	base := tempTree(t)
+	repo := mkdir(t, base, "repo")
+	mkdir(t, repo, ".git")
+	writeFile(t, filepath.Join(repo, ConfigName),
+		"name: demo\nservices:\n  - name: api\n    port: 8000\nports: [8100]\n")
+
+	x := NewIndex()
+	x.Observe(repo)
+
+	cfg, svc, ok := x.MatchPort(state.Port{Port: 8000})
+	if !ok || cfg.Name != "demo" || svc != "api" {
+		t.Fatalf("MatchPort(service port, no cwd) = (%v, %q, %v), want the demo config's api", cfg, svc, ok)
+	}
+	cfg, svc, ok = x.MatchPort(state.Port{Port: 8100})
+	if !ok || cfg.Name != "demo" || svc != "" {
+		t.Fatalf("MatchPort(file port, no cwd) = (%v, %q, %v), want the demo config", cfg, svc, ok)
+	}
+	if _, _, ok := x.MatchPort(state.Port{Port: 9999}); ok {
+		t.Error("a port no config declares must not match")
+	}
+
+	// The resolver has to reach the same conclusion, since that is what puts
+	// the port in the group.
+	got := Resolve([]state.Port{{Port: 8000}}, NoPins{}, NoRuns{}, x)[0]
+	if deref(got.Group) != "demo" {
+		t.Errorf("resolved group = %q, want demo", deref(got.Group))
+	}
+	if got.GroupSource == nil || *got.GroupSource != state.SourceFile {
+		t.Errorf("group source = %v, want file", got.GroupSource)
+	}
+}
+
+// TestIndexWillNotGuessBetweenTwoConfigsClaimingAPort: without a cwd, two
+// projects declaring the same port are indistinguishable, and a wrong group is
+// worse than none.
+func TestIndexWillNotGuessBetweenTwoConfigsClaimingAPort(t *testing.T) {
+	base := tempTree(t)
+	one := mkdir(t, base, "one")
+	mkdir(t, one, ".git")
+	two := mkdir(t, base, "two")
+	mkdir(t, two, ".git")
+	writeFile(t, filepath.Join(one, ConfigName), "name: one\nservices:\n  - name: api\n    port: 8000\n")
+	writeFile(t, filepath.Join(two, ConfigName), "name: two\nservices:\n  - name: api\n    port: 8000\n")
+
+	x := NewIndex()
+	x.Observe(one)
+	x.Observe(two)
+
+	if cfg, _, ok := x.MatchPort(state.Port{Port: 8000}); ok {
+		t.Errorf("MatchPort with no cwd chose %q; two configs claim 8000", cfg.Name)
+	}
+	// With a cwd the answer is unambiguous again.
+	if cfg, _, ok := x.MatchPort(state.Port{Port: 8000, Cwd: two}); !ok || cfg.Name != "two" {
+		t.Errorf("MatchPort(cwd two) = (%v, %v), want the two config", cfg, ok)
 	}
 }
 

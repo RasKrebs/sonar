@@ -192,26 +192,57 @@ func (x *Index) Invalid() []InvalidConfig {
 // MatchPort finds the config that claims a port: one whose `ports:` list
 // contains it, or one of whose services declares it, with the process cwd
 // under the file's directory. The deepest matching config wins.
+//
+// A port with no cwd is not out of reach. Windows has no per-process working
+// directory the scanner can read (see ports.batchGetCwds), so requiring one
+// left every `.sonar.yaml` unable to claim the ports it declares there — the
+// group existed in the index and no listener ever joined it. When the cwd is
+// missing the question that remains is still answerable: is there exactly one
+// known config claiming this port? One is an answer. Two is a guess, and a
+// guess is worse than no group at all.
 func (x *Index) MatchPort(p state.Port) (*Config, string, bool) {
-	if p.Cwd == "" {
+	if p.Cwd != "" {
+		for _, cfg := range x.Configs() {
+			if !under(p.Cwd, cfg.Dir) {
+				continue
+			}
+			if svc, ok := claims(cfg, p.Port); ok {
+				return cfg, svc, true
+			}
+		}
 		return nil, "", false
 	}
+
+	var (
+		match *Config
+		name  string
+		found int
+	)
 	for _, cfg := range x.Configs() {
-		if !under(p.Cwd, cfg.Dir) {
-			continue
-		}
-		for _, svc := range cfg.Services {
-			if svc.Port != 0 && svc.Port == p.Port {
-				return cfg, svc.Name, true
-			}
-		}
-		for _, port := range cfg.Ports {
-			if port == p.Port {
-				return cfg, "", true
-			}
+		if svc, ok := claims(cfg, p.Port); ok {
+			match, name, found = cfg, svc, found+1
 		}
 	}
+	if found == 1 {
+		return match, name, true
+	}
 	return nil, "", false
+}
+
+// claims reports whether cfg declares this port, and under which service name
+// ("" when the port comes from the file's own `ports:` list).
+func claims(cfg *Config, port int) (string, bool) {
+	for _, svc := range cfg.Services {
+		if svc.Port != 0 && svc.Port == port {
+			return svc.Name, true
+		}
+	}
+	for _, p := range cfg.Ports {
+		if p == port {
+			return "", true
+		}
+	}
+	return "", false
 }
 
 // under reports whether path is dir or lives inside it.
