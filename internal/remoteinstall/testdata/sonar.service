@@ -1,0 +1,15 @@
+[Unit]
+Description=sonar daemon
+Documentation=https://github.com/raskrebs/sonar
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/sonar serve
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=2
+KillMode=process
+
+[Install]
+WantedBy=default.target
