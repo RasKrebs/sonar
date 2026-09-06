@@ -101,3 +101,33 @@ func TestProposeEmptyRepo(t *testing.T) {
 		t.Fatalf("an empty proposal does not validate: %v", err)
 	}
 }
+
+// TestProposeUsesProjectRootWhenTheComposeDirIsGone is the daemon's case. A
+// published state.Port carries no Compose working directory — the resolver
+// consumes it before publishing — so a proposal built from a snapshot has only
+// project_root to go on. Without the fallback every container silently drops
+// out of a `groups.init` served by the daemon.
+func TestProposeUsesProjectRootWhenTheComposeDirIsGone(t *testing.T) {
+	f := newFixture(t)
+
+	pp := []ports.ListeningPort{
+		{Port: 5432, PID: 9, Process: "com.docke", Type: ports.PortTypeDocker,
+			DockerContainer: "sonar-db-1", DockerImage: "postgres:17",
+			DockerComposeService: "db", DockerComposeProject: "sonar",
+			ProjectRoot: f.repo},
+		// Attributed to a checkout that is not the one being proposed for.
+		{Port: 6379, PID: 10, Process: "com.docke", Type: ports.PortTypeDocker,
+			DockerContainer: "other-cache-1", DockerComposeService: "cache",
+			DockerComposeProject: "other", ProjectRoot: f.composeOut},
+	}
+
+	// No index at all: the compose arm of portDir cannot answer.
+	cfg := Propose(f.repo, pp, nil)
+
+	if len(cfg.Services) != 1 {
+		t.Fatalf("services = %+v, want only the container inside the repo", cfg.Services)
+	}
+	if got := cfg.Services[0]; got.Port != 5432 || got.Name != "db" || got.Cwd != "" {
+		t.Errorf("service = %+v, want db on 5432 at the repo root", got)
+	}
+}

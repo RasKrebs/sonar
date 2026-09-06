@@ -1065,6 +1065,9 @@
         },
         "write": {
           "type": "boolean"
+        },
+        "force": {
+          "type": "boolean"
         }
       },
       "type": "object",
