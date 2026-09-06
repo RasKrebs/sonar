@@ -39,6 +39,13 @@ ungrouped (1 port)
 brew install raskrebs/sonar/sonar
 ```
 
+Homebrew 6 refuses formulae from third-party taps until you trust the tap once
+(`Error: Refusing to load formula raskrebs/sonar/sonar from untrusted tap`):
+
+```sh
+brew trust raskrebs/sonar
+```
+
 ### Install script
 
 ```sh
