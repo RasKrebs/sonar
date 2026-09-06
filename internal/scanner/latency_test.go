@@ -317,11 +317,18 @@ func TestRescanAlwaysScansOnAStoppedClock(t *testing.T) {
 	}
 }
 
-// TestReadCoalescesOntoAScanThatBeganAfterIt is the other side of the same
-// counter: the read path may be handed the result of a scan that demonstrably
-// started after it asked, and may not be handed the one that was already
-// running. Neither answer depends on the clock.
-func TestReadCoalescesOntoAScanThatBeganAfterIt(t *testing.T) {
+// TestReadDoesNotCoalesceOntoAScanThatBeganBeforeIt is the other side of the counter:
+// a read that arrives while a scan is in flight must scan for itself, because
+// that scan began first and saw a machine this caller has not seen yet.
+//
+// The tick's OS half is held on a channel for the whole assertion, so the read
+// is guaranteed to arrive mid-flight and the tick is guaranteed not to have
+// committed. An earlier version released the tick and then counted scans,
+// which made the result depend on whether the tick committed before the read
+// reached the cache — it did on Linux and not on macOS or Windows, and the
+// test failed on whichever runner won that race rather than on the behaviour
+// it was written for.
+func TestReadDoesNotCoalesceOntoAScanThatBeganBeforeIt(t *testing.T) {
 	frozen := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -341,38 +348,62 @@ func TestReadCoalescesOntoAScanThatBeganAfterIt(t *testing.T) {
 		},
 	})
 
-	// A read that arrives while the tick's scan is in flight must not be
-	// served by it: that scan began first.
-	go l.scanAndPublish(Include{Stats: true})
-	<-entered
-	done := make(chan struct{})
+	tick := make(chan struct{})
 	go func() {
-		defer close(done)
-		if _, err := l.Snapshot(Include{}); err != nil {
-			t.Errorf("Snapshot: %v", err)
-		}
+		defer close(tick)
+		l.scanAndPublish(Include{Stats: true})
 	}()
-	close(release)
-	<-done
+	<-entered
+
+	// The tick holds the run gate, not the RPC gate: overlapping is the point
+	// (contract §44). The read scans and returns while the tick is still
+	// blocked, so this assertion cannot race the tick's commit.
+	if _, err := l.Snapshot(Include{}); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
 	if got := scans.Load(); got != 2 {
 		t.Fatalf("scans = %d, want the read to scan for itself rather than take the one already running", got)
 	}
 
-	// A second read behind the first coalesces onto it: it began later.
-	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := l.Rescan(Include{}); err != nil {
-				t.Errorf("Rescan: %v", err)
-			}
-		}()
+	close(release)
+	<-tick
+}
+
+// TestCoalescingComparesScanNumbersNotTheClock states the rule directly, with
+// no goroutines and a stopped clock: a read may be handed a scan that began
+// after it asked, and never the one that was already running. Both answers
+// come from the scan counter, so they are the same on every platform.
+func TestCoalescingComparesScanNumbersNotTheClock(t *testing.T) {
+	frozen := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	l := New(Options{
+		HostStats:     fixedHost,
+		DaemonVersion: "test",
+		Now:           func() time.Time { return frozen },
+		Scan: func(Include) ([]ports.ListeningPort, error) {
+			return []ports.ListeningPort{{Port: 8123, PID: 42, Process: "python3"}}, nil
+		},
+	})
+	if _, err := l.Snapshot(Include{}); err != nil {
+		t.Fatalf("Snapshot: %v", err)
 	}
-	wg.Wait()
-	// Four forced rescans are four scans; the point of this half is only that
-	// the counter, not the clock, is what decides.
-	if got := scans.Load(); got != 6 {
-		t.Fatalf("scans = %d, want each forced rescan to scan", got)
+	if got := l.scanGeneration(); got != 1 {
+		t.Fatalf("scan generation = %d, want 1 after one scan", got)
+	}
+
+	// Asked before scan 1 began: scan 1 answers it.
+	if _, ok := l.scannedSince(0, Include{}); !ok {
+		t.Error("a scan that began after the caller asked should answer it")
+	}
+	// Asked while (or after) scan 1 was running: it does not.
+	if _, ok := l.scannedSince(1, Include{}); ok {
+		t.Error("the scan that was already running must not answer a later caller")
+	}
+	// Health is never coalesced: the probes run on their own cadence.
+	if _, ok := l.scannedSince(0, Include{Health: true}); ok {
+		t.Error("a health read should never coalesce")
+	}
+	// Stats are only coalesced onto a snapshot that carries them.
+	if _, ok := l.scannedSince(0, Include{Stats: true}); ok {
+		t.Error("a stats read should not coalesce onto a snapshot with no stats")
 	}
 }
