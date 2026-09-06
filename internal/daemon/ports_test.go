@@ -489,6 +489,7 @@ func TestReadsAreFreeWhileSomeoneIsSubscribed(t *testing.T) {
 
 	// The loop keeps scanning on its own cadence; what must not happen is a
 	// read adding scans of its own. Give the reads no time to be "stale".
+	burstStart := time.Now()
 	for range 20 {
 		if e := reader.call("ports.list", rpc.PortsListParams{}, &res); e != nil {
 			t.Fatalf("ports.list: %v", e)
@@ -498,21 +499,39 @@ func TestReadsAreFreeWhileSomeoneIsSubscribed(t *testing.T) {
 		}
 	}
 	if got := h.loop.Status().Scans; got != before {
-		t.Fatalf("forty reads alongside a subscriber cost %d scans, want 0", got-before)
+		st := h.loop.Status()
+		t.Fatalf("forty reads alongside a subscriber cost %d scans, want 0 (interval %dms, last scan %s, burst took %s)",
+			got-before, st.IntervalMs, time.Since(st.LastScanAt), time.Since(burstStart))
 	}
 }
 
-// settleScans waits until the scan counter has stopped moving and returns it.
-// The loop's own cadence is seconds apart (scanner.BaseInterval), so a counter
-// that has held still for a fifth of a second is between ticks, and the caller
-// has the rest of the interval to do its work in.
+// settleScans leaves the scan loop with nothing left to do and returns the scan
+// counter, which is the baseline a "reads cost no scans" assertion needs.
+//
+// Waiting for the counter to go quiet is not enough on its own. A wake queued
+// but not yet served — state.subscribe queues one (contract §25) — is
+// invisible in the counter, and a loop goroutine that has not been scheduled
+// for a while looks exactly like a loop with nothing to do. So the loop is
+// woken and the scan that wake causes is waited for: a wake is coalesced onto
+// the one already queued, so when the counter moves the queue is empty and the
+// goroutine is demonstrably running. Only then is quiet meaningful.
 func settleScans(t *testing.T, h *testHarness) int64 {
 	t.Helper()
 	const (
 		poll   = 20 * time.Millisecond
 		stable = 10
 	)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
+
+	started := h.loop.Status().Scans
+	h.loop.Wake()
+	for h.loop.Status().Scans == started {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the scan loop never served a wake: counter stuck at %d", started)
+		}
+		time.Sleep(poll)
+	}
+
 	last, held := h.loop.Status().Scans, 0
 	for time.Now().Before(deadline) {
 		time.Sleep(poll)
