@@ -122,6 +122,10 @@ type Session struct {
 // Port is one listening socket as published by the daemon. Clients render
 // DisplayName and never derive their own name.
 type Port struct {
+	// Host is the machine this row was observed on: "localhost" for the
+	// daemon's own machine, the registered name for a row multiplexed in from
+	// a remote host's bridge (step 3A.2). It is never empty on the wire.
+	Host        string       `json:"host"`
 	Port        int          `json:"port"`
 	BindAddress string       `json:"bind_address"`
 	IPVersion   string       `json:"ip_version"`
@@ -151,5 +155,10 @@ type Port struct {
 	StartedAt   *string      `json:"started_at" jsonschema:"nullable"`
 }
 
-// Key is the delta identity: "<port>:<bind_address>".
-func (p Port) Key() string { return fmt.Sprintf("%d:%s", p.Port, p.BindAddress) }
+// Key is the delta identity: "<port>:<bind_address>" for a local row and
+// "<host>/<port>:<bind_address>" for a row that came in over a remote bridge.
+// Local keys are deliberately unprefixed so a client written against the
+// pre-3A.2 protocol keeps working unchanged (remote-hosts spec, decision 1).
+func (p Port) Key() string {
+	return PrefixKey(p.Host, fmt.Sprintf("%d:%s", p.Port, p.BindAddress))
+}

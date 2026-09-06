@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 
+	"github.com/invopop/jsonschema"
 	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/state"
 )
@@ -93,11 +94,19 @@ type DaemonSchemaResult struct {
 
 type StateSnapshotParams struct {
 	Include Include `json:"include,omitempty"`
+	// Hosts selects which machines' rows the reply carries. Absent or empty is
+	// localhost only, which is what every client written before remote hosts
+	// existed asks for; ["*"] is every registered host; any other list is
+	// exactly that set of names, so a client that wants localhost alongside a
+	// remote host names both (remote-hosts spec, "Multiplexing").
+	Hosts []string `json:"hosts,omitempty"`
 }
 
 type StateSubscribeParams struct {
 	Include Include `json:"include,omitempty"`
 	Events  bool    `json:"events,omitempty"`
+	// Hosts is StateSnapshotParams.Hosts, per subscriber.
+	Hosts []string `json:"hosts,omitempty"`
 }
 
 // ----------------------------------------------------------------- ports ---
@@ -585,6 +594,72 @@ type RemoteInstallEnd struct {
 	// remote's systemd user session would end at logout, taking the daemon
 	// with it. Empty when lingering is already on or does not apply.
 	LingerHint string `json:"linger_hint,omitempty"`
+}
+
+// RemoteListResult is every registered host, whatever its connection state,
+// with the load the bridge last read from it.
+type RemoteListResult struct {
+	Hosts []state.Host `json:"hosts"`
+}
+
+// RemoteAddParams registers an SSH host. Target is what `ssh` receives,
+// verbatim — a `user@host` or a `~/.ssh/config` alias; sonar never resolves it
+// as DNS. Name defaults to the host part of the target and is the key
+// everything else uses: `--host <name>`, the `host` field on every row, and
+// the "<name>/" prefix on that host's delta keys.
+type RemoteAddParams struct {
+	Target string `json:"target"`
+	// Host is an accepted alias of Target, for clients that call the SSH
+	// destination "host" rather than "target". Target wins when both are set
+	// and they differ.
+	Host      string   `json:"host,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	SSHArgs   []string `json:"ssh_args,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Port      int      `json:"port,omitempty"`
+	RemoteBin string   `json:"remote_bin,omitempty"`
+}
+
+type RemoteAddResult struct {
+	OK   bool       `json:"ok"`
+	Host state.Host `json:"host"`
+}
+
+type RemoteRemoveParams struct {
+	Name string `json:"name"`
+}
+
+// RemoteCallParams forwards one method to a registered host's daemon. Writes
+// are forwarded like any other method (remote-hosts spec, decision 3).
+type RemoteCallParams struct {
+	Host   string          `json:"host"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// RemoteCallResult is whatever the remote daemon returned for the forwarded
+// method, passed through unchanged. Its shape is `method`'s result, so the
+// schema leaves it unconstrained rather than pretending it is one type.
+type RemoteCallResult json.RawMessage
+
+func (r RemoteCallResult) MarshalJSON() ([]byte, error) {
+	if len(r) == 0 {
+		return []byte("null"), nil
+	}
+	return r, nil
+}
+
+func (r *RemoteCallResult) UnmarshalJSON(b []byte) error {
+	*r = append((*r)[:0], b...)
+	return nil
+}
+
+// JSONSchema keeps the generated document honest: the result of a forwarded
+// call is the result of whatever method was forwarded.
+func (RemoteCallResult) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		Description: "The remote daemon's own result for `method`, returned verbatim.",
+	}
 }
 
 // ---------------------------------------------------------------- expose ---

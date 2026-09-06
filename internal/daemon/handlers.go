@@ -7,6 +7,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/scanner"
+	"github.com/raskrebs/sonar/internal/state"
 )
 
 // The core method set for step 1A.1. Namespaces owned by later steps register
@@ -110,12 +111,12 @@ func handleSnapshot(_ context.Context, req *Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap, err := req.Runtime.Scanner.Snapshot(include)
+	snap, err := req.Runtime.Scanner.SnapshotAll(include)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
 			"check `sonar daemon log` for the scanner error")
 	}
-	return filterSnapshot(snap, include), nil
+	return filterSnapshot(snap, include, state.ParseHostFilter(p.Hosts)), nil
 }
 
 func handleSubscribe(_ context.Context, req *Request) (any, error) {
@@ -134,7 +135,7 @@ func handleSubscribe(_ context.Context, req *Request) (any, error) {
 	// first would hold the reply for the length of a stats collection — seconds
 	// on a busy machine — and the first snapshot would still be a delta behind
 	// by the time it arrived.
-	req.Runtime.Server().subscribe(req.Conn, req.ID, include, p.Events)
+	req.Runtime.Server().subscribe(req.Conn, req.ID, include, p.Events, state.ParseHostFilter(p.Hosts))
 	return nil, ErrResponseSent
 }
 

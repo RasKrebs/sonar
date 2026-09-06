@@ -29,7 +29,19 @@ var infoCmd = &cobra.Command{
 		bindIP, _ := cmd.Flags().GetString("ip")
 
 		var lp *ports.ListeningPort
-		if infoHost != "" {
+		if c := routeRemote(cmd.Context(), infoHost); c != nil {
+			defer c.Close()
+			var res rpc.PortsInspectResult
+			err := remoteCall(cmd.Context(), c, infoHost, "ports.inspect", rpc.Selector{
+				Port:        &port,
+				BindAddress: strPtrOrNil(bindIP),
+			}, &res)
+			if err != nil {
+				return err
+			}
+			remote := state.ToListening(res.Port)
+			lp = &remote
+		} else if infoHost != "" {
 			all, scanErr := ports.ScanRemote(infoHost)
 			if scanErr != nil {
 				return scanErr
@@ -179,7 +191,12 @@ func printField(label, value string) {
 }
 
 func init() {
-	infoCmd.Flags().String("host", "", "Query a remote host via SSH (e.g. user@hostname)")
+	infoCmd.Flags().String("host", "",
+		"Read a registered `host` through the daemon, or query any user@hostname over SSH")
+	_ = infoCmd.RegisterFlagCompletionFunc("host",
+		func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return remoteHostNames(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+		})
 	infoCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
 	rootCmd.AddCommand(infoCmd)
 }

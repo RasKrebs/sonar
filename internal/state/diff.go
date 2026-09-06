@@ -20,20 +20,20 @@ func diff(prev, next Snapshot, withStats bool) Delta {
 		ExposuresActive: next.ExposuresActive,
 		Ports:           diffPorts(prev.Ports, next.Ports, withStats),
 		Groups: diffKeyed(prev.Groups, next.Groups,
-			func(g Group) string { return g.Name },
+			func(g Group) string { return g.Key() },
 			func(a, b Group) bool {
 				return a.Status == b.Status &&
 					reflect.DeepEqual(a.Members, b.Members) &&
 					reflect.DeepEqual(a.Services, b.Services)
 			}),
 		Tunnels: diffKeyed(prev.Tunnels, next.Tunnels,
-			func(t Tunnel) string { return t.ID },
+			func(t Tunnel) string { return t.Key() },
 			func(a, b Tunnel) bool { return reflect.DeepEqual(a, b) }),
 		Proxies: diffKeyed(prev.Proxies, next.Proxies,
-			func(p Proxy) string { return p.ID },
+			func(p Proxy) string { return p.Key() },
 			func(a, b Proxy) bool { return reflect.DeepEqual(a, b) }),
 		Sessions: diffKeyed(prev.Sessions, next.Sessions,
-			func(s SessionRecord) string { return s.ID },
+			func(s SessionRecord) string { return s.Key() },
 			func(a, b SessionRecord) bool { return reflect.DeepEqual(a, b) }),
 		Hosts: DiffHosts(prev.Hosts, next.Hosts),
 	}
@@ -43,7 +43,7 @@ func diff(prev, next Snapshot, withStats bool) Delta {
 // because the scanner asks the same question on its own — "did only the
 // machine's load move?" — when it decides whether a tick is worth publishing.
 func DiffHosts(prev, next []Host) Change[Host] {
-	return diffKeyed(prev, next, func(h Host) string { return h.Name }, hostsEqual)
+	return diffKeyed(prev, next, func(h Host) string { return h.Key() }, hostsEqual)
 }
 
 // hostsEqual decides whether a host row changed. Host load is state, not an

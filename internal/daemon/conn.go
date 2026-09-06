@@ -11,6 +11,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/scanner"
+	"github.com/raskrebs/sonar/internal/state"
 )
 
 // QueueSize bounds a connection's outbound queue. A client that stops reading
@@ -38,6 +39,10 @@ type Conn struct {
 	subscribed bool
 	include    scanner.Include
 	events     bool
+	// hosts is the `state.subscribe {hosts}` filter. The zero value is
+	// localhost only, so a client that never sends the field reads exactly the
+	// stream it read before remote hosts existed.
+	hosts state.HostFilter
 
 	mu             sync.Mutex
 	client         string

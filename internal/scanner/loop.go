@@ -86,6 +86,13 @@ type Options struct {
 	// interval and therefore needs the same collector every tick.
 	HostStats func(ctx context.Context) (state.Host, error)
 
+	// Remote returns the rows multiplexed in from the registered remote hosts,
+	// already tagged with their host name (step 3A.2). It is a function
+	// because the connection manager is installed from an OnStart hook, after
+	// the loop exists; nil means "localhost only", which is what a daemon with
+	// no registered hosts publishes.
+	Remote func() state.Rows
+
 	// Scan overrides the OS scan. Tests inject a fake; production leaves it nil
 	// and gets ports.Scan + docker.EnrichPorts + ports.Enrich.
 	Scan func(include Include) ([]ports.ListeningPort, error)
@@ -136,9 +143,13 @@ type Loop struct {
 	// order.
 	scanMu sync.Mutex
 
-	mu           sync.Mutex
-	subs         int
-	snap         state.Snapshot
+	mu   sync.Mutex
+	subs int
+	snap state.Snapshot
+	// local is the last scan's own rows, before the remote hosts were merged
+	// in. RemoteChanged republishes from it, so a remote host's delta costs
+	// nothing on the local machine: no OS scan, no attribution, no probes.
+	local        state.Rows
 	haveSnap     bool
 	lastScanAt   time.Time
 	lastHealthAt time.Time
@@ -239,27 +250,82 @@ func (l *Loop) SetPublisher(p Publisher) {
 	}
 }
 
-// Cached returns the last published snapshot without scanning. state.subscribe
-// uses it so the reply can be queued atomically with the subscription.
-func (l *Loop) Cached() state.Snapshot {
+// SetRemote installs the remote-rows provider after construction. The remote
+// connection manager calls it from its OnStart hook.
+func (l *Loop) SetRemote(f func() state.Rows) {
+	if f != nil {
+		l.opts.Remote = f
+	}
+}
+
+// remoteRows is the current remote contribution, or nothing.
+func (l *Loop) remoteRows() state.Rows {
+	if l.opts.Remote == nil {
+		return state.Rows{}
+	}
+	return l.opts.Remote()
+}
+
+// Cached returns the last published snapshot without scanning, as this machine
+// alone: no remote host's rows.
+//
+// Local-only is the default on purpose. Everything inside the daemon that
+// resolves a selector — `ports.kill`, `ports.inspect`, `groups.start`, the
+// session handlers — reads a snapshot, and a port 3000 that also exists on a
+// registered host must not make those calls ambiguous for a caller that never
+// mentioned a host. A `host` on selectors is step 3A.4's job; until then, and
+// after it for every caller that omits one, a snapshot means localhost.
+//
+// The two places that publish state to clients — state.subscribe's opening
+// reply and the state.snapshot method — ask for CachedAll / SnapshotAll and
+// apply the subscriber's own `hosts` filter.
+func (l *Loop) Cached() state.Snapshot { return localOnly(l.CachedAll()) }
+
+// CachedAll is Cached including every registered remote host's rows. It is
+// what state.subscribe replies with, so a subscriber that asked for other
+// hosts sees them in its opening snapshot rather than waiting for one of them
+// to change.
+func (l *Loop) CachedAll() state.Snapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.haveSnap {
-		return state.Snapshot{
+		// Even before the first scan `hosts` names this machine: a client
+		// that subscribes at startup must not have to special-case an empty
+		// collection to find localhost. The registered remote hosts are
+		// already there too, so a subscriber never sees them blink in.
+		base := state.Rows{Hosts: []state.Host{l.identityRow()}}
+		return base.Append(l.remoteRows()).Normalize().Into(state.Snapshot{
 			At:            l.now().Format(time.RFC3339),
 			DaemonVersion: l.opts.DaemonVersion,
-			Ports:         []state.Port{},
-			Groups:        []state.Group{},
-			Tunnels:       []state.Tunnel{},
-			Proxies:       []state.Proxy{},
-			Sessions:      []state.SessionRecord{},
-			// Even before the first scan `hosts` names this machine: a client
-			// that subscribes at startup must not have to special-case an
-			// empty collection to find localhost.
-			Hosts: []state.Host{l.identityRow()},
-		}
+		})
 	}
 	return l.snap
+}
+
+// localOnly drops the remote hosts' rows. It is a no-op, allocation included,
+// when there are none, which is every daemon with no host registered.
+func localOnly(s state.Snapshot) state.Snapshot {
+	for i := range s.Ports {
+		if !state.IsLocalhost(s.Ports[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Hosts {
+		if !state.IsLocalhost(s.Hosts[i].Name) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Groups {
+		if !state.IsLocalhost(s.Groups[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Sessions {
+		if !state.IsLocalhost(s.Sessions[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	return s
 }
 
 // Wake nudges a stopped or backed-off loop to scan now. Called when a
@@ -406,19 +472,20 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	host.Ports, host.Groups = len(rows), len(groupRows)
 	host.LastSeen = l.lastScanAt.Format(time.RFC3339)
 
-	next = state.Snapshot{
+	// Tunnels and proxies belong to spec 3. Every collection is always an
+	// array, never null.
+	local := state.Rows{
+		Ports:    rows,
+		Groups:   groupRows,
+		Sessions: sessionRows,
+		Hosts:    []state.Host{host},
+	}.Tag(state.LocalhostName).Normalize()
+	l.local = local
+
+	next = local.Append(l.remoteRows()).Into(state.Snapshot{
 		At:            l.lastScanAt.Format(time.RFC3339),
 		DaemonVersion: l.opts.DaemonVersion,
-		Ports:         rows,
-		Groups:        groupRows,
-		// Tunnels and proxies belong to spec 3. Every collection is always an
-		// array, never null.
-		Tunnels:  []state.Tunnel{},
-		Proxies:  []state.Proxy{},
-		Sessions: sessionRows,
-		// One row until step 3A.2 registers remote hosts.
-		Hosts: []state.Host{host},
-	}
+	})
 
 	if l.haveSnap && !snapshotChanged(prev, next, include.Stats) {
 		if !hostChanged(prev, next) {
@@ -449,6 +516,43 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	l.haveSnap = true
 	l.interval = BaseInterval
 	return next, prev, true, nil
+}
+
+// RemoteChanged republishes the current state with the remote hosts' rows as
+// they are now. It runs no OS scan: the local half of the last tick is reused
+// verbatim, so a remote daemon publishing a delta every two seconds costs the
+// local machine a diff and a marshal rather than a full port scan.
+//
+// It takes scanMu like a scan does, so its publish cannot interleave with one
+// and delta seq order stays publish order (contract §38). Before the first
+// local scan there is nothing to merge into, so it wakes the loop instead and
+// the remote rows ride out with the first tick.
+func (l *Loop) RemoteChanged() {
+	l.scanMu.Lock()
+	defer l.scanMu.Unlock()
+
+	l.mu.Lock()
+	if !l.haveSnap {
+		l.mu.Unlock()
+		l.Wake()
+		return
+	}
+	prev := l.snap
+	next := l.local.Append(l.remoteRows()).Into(state.Snapshot{
+		At:              l.now().Format(time.RFC3339),
+		DaemonVersion:   l.opts.DaemonVersion,
+		ExposuresActive: prev.ExposuresActive,
+	})
+	if !snapshotChanged(prev, next, true) && !hostChanged(prev, next) {
+		l.mu.Unlock()
+		return
+	}
+	l.seq++
+	next.Seq = l.seq
+	l.snap = next
+	l.mu.Unlock()
+
+	l.publish(prev, next, nil)
 }
 
 // collectHost reads this machine's load for the tick. A failure is not a scan
@@ -610,6 +714,14 @@ func (l *Loop) nowRFC3339() string { return l.now().Format(time.RFC3339) }
 // caller asked for; otherwise it scans now. Either way it wakes the loop, so
 // reading state snaps the interval back to the base (spec, "Scanner loop").
 func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
+	snap, err := l.SnapshotAll(include)
+	return localOnly(snap), err
+}
+
+// SnapshotAll is Snapshot including every registered remote host's rows. Only
+// the state.snapshot method uses it, and it applies the caller's own `hosts`
+// filter to the result.
+func (l *Loop) SnapshotAll(include Include) (state.Snapshot, error) {
 	defer l.Wake()
 
 	if snap, ok := l.cached(include); ok {
@@ -631,7 +743,8 @@ func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
 // later. Rescan closes the window by holding scanMu across both halves.
 func (l *Loop) Rescan(include Include) (state.Snapshot, error) {
 	defer l.Wake()
-	return l.scanNow(include)
+	snap, err := l.scanNow(include)
+	return localOnly(snap), err
 }
 
 // scanNow is the uncached half of both: one scan under scanMu, published

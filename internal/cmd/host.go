@@ -23,8 +23,9 @@ var hostCmd = &cobra.Command{
 	Short: "Show the machine sonar is watching and its load",
 	Long: `Show the hosts sonar knows about: their cpu, load average, memory and disk.
 
-Today that is this machine, published as ` + "`localhost`" + `. Registered remote
-hosts join the same table in milestone 3.
+This machine is published as ` + "`localhost`" + `; every host registered with
+` + "`sonar remote add`" + ` joins the same table with its own load and the state of
+its connection.
 
 Examples:
   sonar host          # the table

@@ -24,7 +24,7 @@ func TestFilterSnapshotKeepsHosts(t *testing.T) {
 		Ports: []state.Port{{Port: 3000, Stats: &state.Stats{CPUPercent: 4}}},
 		Hosts: []state.Host{testHost(12.5)},
 	}
-	got := filterSnapshot(snap, scanner.Include{})
+	got := filterSnapshot(snap, scanner.Include{}, state.LocalOnly())
 	if len(got.Hosts) != 1 || got.Hosts[0].CPUPercent == nil {
 		t.Fatalf("hosts = %+v, want the row with its load", got.Hosts)
 	}
@@ -35,7 +35,7 @@ func TestFilterSnapshotKeepsHosts(t *testing.T) {
 
 // Every collection is an array on the wire, never null (contract §5).
 func TestFilterSnapshotNeverLeavesHostsNull(t *testing.T) {
-	got := filterSnapshot(state.Snapshot{}, scanner.Include{})
+	got := filterSnapshot(state.Snapshot{}, scanner.Include{}, state.LocalOnly())
 	raw, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestHostOnlyDeltaIsSentWithoutInclude(t *testing.T) {
 	prev := state.Snapshot{Hosts: []state.Host{testHost(12.5)}}
 	next := state.Snapshot{Seq: 2, Hosts: []state.Host{testHost(41)}}
 
-	msg := marshalDelta(prev, next, scanner.Include{})
+	msg := marshalDelta(prev, next, scanner.Include{}, state.LocalOnly())
 	if msg == nil {
 		t.Fatal("a host-only delta was dropped for a subscriber with no include")
 	}
@@ -81,7 +81,7 @@ func TestHostOnlyDeltaIsSentWithoutInclude(t *testing.T) {
 // A tick where nothing at all moved is still not sent.
 func TestEmptyDeltaIsStillDropped(t *testing.T) {
 	snap := state.Snapshot{Hosts: []state.Host{testHost(12.5)}}
-	if msg := marshalDelta(snap, snap, scanner.Include{}); msg != nil {
+	if msg := marshalDelta(snap, snap, scanner.Include{}, state.LocalOnly()); msg != nil {
 		t.Errorf("an empty delta was sent: %s", msg)
 	}
 }

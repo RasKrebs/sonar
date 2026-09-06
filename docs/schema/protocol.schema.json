@@ -599,6 +599,9 @@
     },
     "Event": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },
@@ -870,6 +873,9 @@
     },
     "Group": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -920,6 +926,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "name",
         "source",
         "root_dir",
@@ -1150,6 +1157,9 @@
     },
     "GroupsInspectResult": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -1206,6 +1216,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "name",
         "source",
         "root_dir",
@@ -1842,6 +1853,9 @@
     },
     "Port": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -2032,6 +2046,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "port",
         "bind_address",
         "ip_version",
@@ -2505,6 +2520,9 @@
     },
     "Proxy": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
@@ -2535,6 +2553,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "id",
         "service_port",
         "listen_port",
@@ -2545,6 +2564,72 @@
         "connections",
         "requests"
       ]
+    },
+    "RemoteAddParams": {
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "remote_bin": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "target"
+      ]
+    },
+    "RemoteAddResult": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "host": {
+          "$ref": "#/definitions/Host"
+        }
+      },
+      "type": "object",
+      "required": [
+        "ok",
+        "host"
+      ]
+    },
+    "RemoteCallParams": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "type": "object",
+      "required": [
+        "host",
+        "method"
+      ]
+    },
+    "RemoteCallResult": {
+      "description": "The remote daemon's own result for `method`, returned verbatim."
     },
     "RemoteInstallChunk": {
       "properties": {
@@ -2654,6 +2739,31 @@
         "ok",
         "affected",
         "subscription_id"
+      ]
+    },
+    "RemoteListResult": {
+      "properties": {
+        "hosts": {
+          "items": {
+            "$ref": "#/definitions/Host"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "hosts"
+      ]
+    },
+    "RemoteRemoveParams": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name"
       ]
     },
     "RemoteScanParams": {
@@ -3142,6 +3252,9 @@
         "detected": {
           "type": "boolean"
         },
+        "host": {
+          "type": "string"
+        },
         "first_seen": {
           "type": "string"
         },
@@ -3169,6 +3282,7 @@
         "worktree",
         "branch",
         "detected",
+        "host",
         "first_seen",
         "last_seen",
         "runs",
@@ -3324,6 +3438,12 @@
       "properties": {
         "include": {
           "$ref": "#/definitions/Include"
+        },
+        "hosts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -3335,6 +3455,12 @@
         },
         "events": {
           "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -3422,6 +3548,9 @@
     },
     "Tunnel": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
@@ -3494,6 +3623,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "id",
         "target_port",
         "target_group",
@@ -3856,6 +3986,22 @@
         "$ref": "#/definitions/PortsWaitEnd"
       }
     },
+    "remote.add": {
+      "params": {
+        "$ref": "#/definitions/RemoteAddParams"
+      },
+      "result": {
+        "$ref": "#/definitions/RemoteAddResult"
+      }
+    },
+    "remote.call": {
+      "params": {
+        "$ref": "#/definitions/RemoteCallParams"
+      },
+      "result": {
+        "$ref": "#/definitions/RemoteCallResult"
+      }
+    },
     "remote.install": {
       "params": {
         "$ref": "#/definitions/RemoteInstallParams"
@@ -3868,6 +4014,22 @@
       },
       "stream_end": {
         "$ref": "#/definitions/RemoteInstallEnd"
+      }
+    },
+    "remote.list": {
+      "params": {
+        "$ref": "#/definitions/Empty"
+      },
+      "result": {
+        "$ref": "#/definitions/RemoteListResult"
+      }
+    },
+    "remote.remove": {
+      "params": {
+        "$ref": "#/definitions/RemoteRemoveParams"
+      },
+      "result": {
+        "$ref": "#/definitions/OKResult"
       }
     },
     "remote.scan": {

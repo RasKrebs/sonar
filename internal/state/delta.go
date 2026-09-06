@@ -25,6 +25,9 @@ type Delta struct {
 // Event is a discrete notification, sent alongside deltas when a subscriber
 // asked for events.
 type Event struct {
+	// Host is the machine the event happened on: "localhost", or the
+	// registered name of the remote host whose bridge forwarded it.
+	Host  string         `json:"host,omitempty"`
 	Kind  string         `json:"kind"` // port_up port_down port_restarted group_up group_down health_changed scan_error daemon_stopping db_reset tunnel_up tunnel_down
 	At    string         `json:"at"`
 	Port  *Port          `json:"port,omitempty"`
