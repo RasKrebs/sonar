@@ -121,14 +121,15 @@ func TestCwdGroupsPortsUnderTheGitRoot(t *testing.T) {
 
 	// And the demo itself: the tree puts both under one heading named after the
 	// repository.
-	tree := e.command("list", "--tree")
-	tree.Dir = repo
-	treeOut, err := tree.CombinedOutput()
-	if err != nil {
-		t.Fatalf("sonar list --tree: %v\n%s", err, treeOut)
-	}
+	//
+	// The CLI's read is only as fresh as the daemon's last publish: `sonar
+	// list` is answered from the shared snapshot, so a listener ports.list has
+	// already reported can still be missing from a tree rendered a moment
+	// later, until the next scan tick lands. The render is therefore polled
+	// until both ports are under the heading, and the last output is what a
+	// failure prints.
+	treeOut, section := waitForTree(t, e, repo, repoName, rootPort, nestedPort)
 	t.Logf("sonar list --tree:\n%s", treeOut)
-	section := treeSection(string(treeOut), repoName)
 	if section == nil {
 		// The rows are in the daemon — waitForCwds proved it — so a group
 		// missing from the tree is the display filter, not the scan. `list`
@@ -143,6 +144,40 @@ func TestCwdGroupsPortsUnderTheGitRoot(t *testing.T) {
 			t.Errorf("port %d is not under the %q group:\n%s", port, repoName, treeOut)
 		}
 	}
+}
+
+// waitForTree renders `sonar list --tree` until the repository's heading holds
+// every wanted port, or the timeout expires. It returns the last output and the
+// section found in it, so the caller's assertions report the real thing rather
+// than a snapshot that was merely early.
+func waitForTree(t *testing.T, e *env, dir, name string, wanted ...int) ([]byte, []string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		tree := e.command("list", "--tree")
+		tree.Dir = dir
+		out, err := tree.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sonar list --tree: %v\n%s", err, out)
+		}
+		section := treeSection(string(out), name)
+		if section != nil && hasAllPorts(section, wanted) {
+			return out, section
+		}
+		if !time.Now().Before(deadline) {
+			return out, section
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func hasAllPorts(section []string, ports []int) bool {
+	for _, port := range ports {
+		if !sectionHasPort(section, port) {
+			return false
+		}
+	}
+	return true
 }
 
 // reportPortRows prints everything about the spawned listeners that decides
