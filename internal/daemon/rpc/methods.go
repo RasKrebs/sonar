@@ -608,7 +608,11 @@ type RemoteListResult struct {
 // everything else uses: `--host <name>`, the `host` field on every row, and
 // the "<name>/" prefix on that host's delta keys.
 type RemoteAddParams struct {
-	Target    string   `json:"target"`
+	Target string `json:"target"`
+	// Host is an accepted alias of Target, for clients that call the SSH
+	// destination "host" rather than "target". Target wins when both are set
+	// and they differ.
+	Host      string   `json:"host,omitempty"`
 	Name      string   `json:"name,omitempty"`
 	SSHArgs   []string `json:"ssh_args,omitempty"`
 	Identity  string   `json:"identity,omitempty"`

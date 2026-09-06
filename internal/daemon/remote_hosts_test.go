@@ -214,3 +214,64 @@ func TestEventsAreFilteredByHost(t *testing.T) {
 		t.Errorf("an untagged event is a local one and should be delivered")
 	}
 }
+
+// TestSelectorsDefaultToLocalhost is the rule step 3A.4 will build a `host`
+// field on top of: a read or a kill that names no host resolves against this
+// machine, so a port that also exists on a registered host does not suddenly
+// become ambiguous for a caller that never heard of remote hosts.
+func TestSelectorsDefaultToLocalhost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+
+	// The same port number on both machines.
+	h.loop.SetRemote(func() state.Rows { return remoteRows("hetzner", 3000) })
+	h.setRows(ports.ListeningPort{Port: 3000, BindAddress: "127.0.0.1", PID: 1, Process: "go"})
+
+	// A scan has to have happened before Cached has anything to say.
+	rescanned, err := h.loop.Rescan(scanner.Include{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned, err := h.loop.Snapshot(scanner.Include{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The scanner's own read paths — what every selector-resolving handler
+	// uses — see one row, not two.
+	for name, snap := range map[string]state.Snapshot{
+		"Cached":   h.loop.Cached(),
+		"Snapshot": scanned,
+		"Rescan":   rescanned,
+	} {
+		matches := 0
+		for _, p := range snap.Ports {
+			if p.Port == 3000 {
+				matches++
+			}
+			if !state.IsLocalhost(p.Host) {
+				t.Errorf("%s returned a %q row: %+v", name, p.Host, p)
+			}
+		}
+		if matches != 1 {
+			t.Errorf("%s matched port 3000 %d times, want 1", name, matches)
+		}
+		for _, host := range snap.Hosts {
+			if !state.IsLocalhost(host.Name) {
+				t.Errorf("%s returned the %q host row", name, host.Name)
+			}
+		}
+	}
+
+	c := h.dial(ctx)
+	var list rpc.PortsListResult
+	if err := c.call("ports.list", rpc.PortsListParams{}, &list); err != nil {
+		t.Fatalf("ports.list: %v", err)
+	}
+	for _, p := range list.Ports {
+		if !state.IsLocalhost(p.Host) {
+			t.Errorf("ports.list leaked a %q row without being asked", p.Host)
+		}
+	}
+}

@@ -379,7 +379,7 @@ func (s *Server) demand() (int, scanner.Include) {
 // is unchanged.
 func (s *Server) subscribe(c *Conn, id json.RawMessage, include scanner.Include, events bool, hosts state.HostFilter) {
 	s.subsMu.Lock()
-	snap := s.loop.Cached()
+	snap := s.loop.CachedAll()
 	c.subscribed, c.include, c.events, c.hosts = true, include, events, hosts
 	filtered := filterSnapshot(snap, include, hosts)
 	raw, err := json.Marshal(filtered)

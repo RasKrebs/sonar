@@ -2570,6 +2570,9 @@
         "target": {
           "type": "string"
         },
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },

@@ -266,9 +266,26 @@ func (l *Loop) remoteRows() state.Rows {
 	return l.opts.Remote()
 }
 
-// Cached returns the last published snapshot without scanning. state.subscribe
-// uses it so the reply can be queued atomically with the subscription.
-func (l *Loop) Cached() state.Snapshot {
+// Cached returns the last published snapshot without scanning, as this machine
+// alone: no remote host's rows.
+//
+// Local-only is the default on purpose. Everything inside the daemon that
+// resolves a selector — `ports.kill`, `ports.inspect`, `groups.start`, the
+// session handlers — reads a snapshot, and a port 3000 that also exists on a
+// registered host must not make those calls ambiguous for a caller that never
+// mentioned a host. A `host` on selectors is step 3A.4's job; until then, and
+// after it for every caller that omits one, a snapshot means localhost.
+//
+// The two places that publish state to clients — state.subscribe's opening
+// reply and the state.snapshot method — ask for CachedAll / SnapshotAll and
+// apply the subscriber's own `hosts` filter.
+func (l *Loop) Cached() state.Snapshot { return localOnly(l.CachedAll()) }
+
+// CachedAll is Cached including every registered remote host's rows. It is
+// what state.subscribe replies with, so a subscriber that asked for other
+// hosts sees them in its opening snapshot rather than waiting for one of them
+// to change.
+func (l *Loop) CachedAll() state.Snapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.haveSnap {
@@ -283,6 +300,32 @@ func (l *Loop) Cached() state.Snapshot {
 		})
 	}
 	return l.snap
+}
+
+// localOnly drops the remote hosts' rows. It is a no-op, allocation included,
+// when there are none, which is every daemon with no host registered.
+func localOnly(s state.Snapshot) state.Snapshot {
+	for i := range s.Ports {
+		if !state.IsLocalhost(s.Ports[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Hosts {
+		if !state.IsLocalhost(s.Hosts[i].Name) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Groups {
+		if !state.IsLocalhost(s.Groups[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	for i := range s.Sessions {
+		if !state.IsLocalhost(s.Sessions[i].Host) {
+			return state.FilterSnapshot(s, state.LocalOnly())
+		}
+	}
+	return s
 }
 
 // Wake nudges a stopped or backed-off loop to scan now. Called when a
@@ -671,6 +714,14 @@ func (l *Loop) nowRFC3339() string { return l.now().Format(time.RFC3339) }
 // caller asked for; otherwise it scans now. Either way it wakes the loop, so
 // reading state snaps the interval back to the base (spec, "Scanner loop").
 func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
+	snap, err := l.SnapshotAll(include)
+	return localOnly(snap), err
+}
+
+// SnapshotAll is Snapshot including every registered remote host's rows. Only
+// the state.snapshot method uses it, and it applies the caller's own `hosts`
+// filter to the result.
+func (l *Loop) SnapshotAll(include Include) (state.Snapshot, error) {
 	defer l.Wake()
 
 	if snap, ok := l.cached(include); ok {
@@ -692,7 +743,8 @@ func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
 // later. Rescan closes the window by holding scanMu across both halves.
 func (l *Loop) Rescan(include Include) (state.Snapshot, error) {
 	defer l.Wake()
-	return l.scanNow(include)
+	snap, err := l.scanNow(include)
+	return localOnly(snap), err
 }
 
 // scanNow is the uncached half of both: one scan under scanMu, published

@@ -477,3 +477,23 @@ func TestSSHArgs(t *testing.T) {
 		t.Errorf("remote command = %q, want the PATH default", bare[len(bare)-1])
 	}
 }
+
+// TestTargetOfAcceptsHostAsAnAlias: some clients call the SSH destination
+// "host". Both spellings mean the string ssh receives.
+func TestTargetOfAcceptsHostAsAnAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		in   rpc.RemoteAddParams
+		want string
+	}{
+		{"target only", rpc.RemoteAddParams{Target: "deploy@box"}, "deploy@box"},
+		{"host only", rpc.RemoteAddParams{Host: "deploy@box"}, "deploy@box"},
+		{"both, target wins", rpc.RemoteAddParams{Target: "a@x", Host: "b@y"}, "a@x"},
+		{"neither", rpc.RemoteAddParams{}, ""},
+	}
+	for _, tc := range tests {
+		if got := TargetOf(tc.in); got != tc.want {
+			t.Errorf("%s: TargetOf = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

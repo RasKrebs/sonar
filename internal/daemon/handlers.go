@@ -111,7 +111,7 @@ func handleSnapshot(_ context.Context, req *Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap, err := req.Runtime.Scanner.Snapshot(include)
+	snap, err := req.Runtime.Scanner.SnapshotAll(include)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
 			"check `sonar daemon log` for the scanner error")

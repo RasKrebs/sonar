@@ -114,7 +114,7 @@ func handleAdd(_ context.Context, req *daemon.Request) (any, error) {
 
 	h, err := NormalizeHost(Host{
 		Name:      p.Name,
-		Target:    p.Target,
+		Target:    TargetOf(p),
 		SSHArgs:   p.SSHArgs,
 		Identity:  p.Identity,
 		Port:      p.Port,
@@ -192,6 +192,16 @@ func handleCall(ctx context.Context, req *daemon.Request) (any, error) {
 		return nil, err
 	}
 	return rpc.RemoteCallResult(out), nil
+}
+
+// TargetOf is the SSH destination a remote.add call names. Some clients spell
+// the field `host` rather than `target`; both mean the string ssh receives,
+// and `target` wins when a client sends both.
+func TargetOf(p rpc.RemoteAddParams) string {
+	if t := strings.TrimSpace(p.Target); t != "" {
+		return t
+	}
+	return strings.TrimSpace(p.Host)
 }
 
 // unknownHostError names the hosts that do exist, which is what a user who
