@@ -121,3 +121,58 @@ func TestUptimeOfAnUnparseableStartIsEmpty(t *testing.T) {
 		t.Fatalf("uptime of garbage = %q, want empty", got)
 	}
 }
+
+// TestIsWindowsDesktopApp is the classification that decides whether a Windows
+// port is visible at all: an app is hidden from `sonar list` and never joins a
+// group. Two rules used to hide everything on a CI runner — a binary in
+// %LOCALAPPDATA%\Temp is not an installed app, and an unidentified process is
+// not evidence of one.
+func TestIsWindowsDesktopApp(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		process string
+		pid     int
+		want    bool
+	}{
+		{"system idle", "", "", 0, true},
+		{"system", "", "", 4, true},
+		{"unknown process", "", "", 7276, false},
+		{"temp build", `C:\Users\RUNNER~1\AppData\Local\Temp\sonar-itest-listener123\listener.exe 5000`, "listener.exe", 7276, false},
+		{"installed app", `C:\Users\dev\AppData\Local\Programs\cursor\Cursor.exe`, "Cursor.exe", 900, true},
+		{"roaming app", `C:\Users\dev\AppData\Roaming\Spotify\Spotify.exe`, "Spotify.exe", 901, true},
+		{"windows service", `C:\Windows\System32\svchost.exe -k RPCSS`, "svchost.exe", 1064, true},
+		{"store app", `C:\Program Files\WindowsApps\Something\app.exe`, "app.exe", 902, true},
+		{"dev server", `C:\Program Files\nodejs\node.exe server.js`, "node.exe", 903, false},
+		{"known app by name only", "", "chrome.exe", 904, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isWindowsDesktopApp(tc.command, tc.process, tc.pid); got != tc.want {
+				t.Errorf("isWindowsDesktopApp(%q, %q, %d) = %v, want %v",
+					tc.command, tc.process, tc.pid, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseTasklist: the fallback that names a process when the CIM query does
+// not. A row it cannot read costs that row only.
+func TestParseTasklist(t *testing.T) {
+	out := "\"System Idle Process\",\"0\",\"Services\",\"0\",\"8 K\"\r\n" +
+		"\"listener.exe\",\"7276\",\"Console\",\"1\",\"5,120 K\"\r\n" +
+		"\"not a row\"\r\n" +
+		"\"svchost.exe\",\"nope\",\"Services\",\"0\",\"9,000 K\"\r\n" +
+		"\"node.exe\",\"3812\",\"Console\",\"1\",\"42,000 K\"\r\n"
+
+	got := parseTasklist(out)
+	want := map[int]string{0: "System Idle Process", 7276: "listener.exe", 3812: "node.exe"}
+	if len(got) != len(want) {
+		t.Fatalf("parseTasklist = %v, want %v", got, want)
+	}
+	for pid, name := range want {
+		if got[pid] != name {
+			t.Errorf("pid %d = %q, want %q", pid, got[pid], name)
+		}
+	}
+}

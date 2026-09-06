@@ -302,3 +302,61 @@ func TestParseNetstat_DualStackWildcard(t *testing.T) {
 		t.Errorf(":: reported %q, want IPv6", byBind["::"])
 	}
 }
+
+// TestParseNetstat_RealCapture runs the parser over a verbatim `netstat -ano`
+// capture: the two header lines, IPv4 and IPv6 listeners, established
+// connections that must be ignored, a LISTENING row owned by pid 0 and a dev
+// server. The Windows daemon sees no ports at all when this parser is wrong,
+// so it is pinned against real output rather than a hand-shaped sample.
+func TestParseNetstat_RealCapture(t *testing.T) {
+	output := "\r\nActive Connections\r\n\r\n" +
+		"  Proto  Local Address          Foreign Address        State           PID\r\n" +
+		"  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1064\r\n" +
+		"  TCP    0.0.0.0:445            0.0.0.0:0              LISTENING       4\r\n" +
+		"  TCP    0.0.0.0:5040           0.0.0.0:0              LISTENING       0\r\n" +
+		"  TCP    127.0.0.1:49670        127.0.0.1:49671        ESTABLISHED     7276\r\n" +
+		"  TCP    127.0.0.1:52341        0.0.0.0:0              LISTENING       7276\r\n" +
+		"  TCP    10.1.0.4:49675         20.209.14.65:443       ESTABLISHED     3812\r\n" +
+		"  TCP    [::]:135               [::]:0                 LISTENING       1064\r\n" +
+		"  TCP    [::1]:52341            [::]:0                 LISTENING       7276\r\n" +
+		"  TCP    [::]:445               [::]:0                 TIME_WAIT       0\r\n" +
+		"  UDP    0.0.0.0:5353           *:*                                    2648\r\n"
+
+	got := parseNetstat(output)
+	if len(got) != 6 {
+		t.Fatalf("parsed %d rows, want the 6 LISTENING ones: %+v", len(got), got)
+	}
+
+	type row struct {
+		pid     int
+		bind    string
+		version string
+	}
+	byKey := map[string]row{}
+	for _, r := range got {
+		byKey[r.PortKey()] = row{r.PID, r.BindAddress, r.IPVersion}
+	}
+	want := map[string]row{
+		"135:0.0.0.0":     {1064, "0.0.0.0", "IPv4"},
+		"445:0.0.0.0":     {4, "0.0.0.0", "IPv4"},
+		"5040:0.0.0.0":    {0, "0.0.0.0", "IPv4"},
+		"52341:127.0.0.1": {7276, "127.0.0.1", "IPv4"},
+		"135:::":          {1064, "::", "IPv6"},
+		"52341:::1":       {7276, "::1", "IPv6"},
+	}
+	for key, w := range want {
+		g, ok := byKey[key]
+		if !ok {
+			t.Errorf("%s missing from the parse: %+v", key, byKey)
+			continue
+		}
+		if g != w {
+			t.Errorf("%s = %+v, want %+v", key, g, w)
+		}
+	}
+	for _, unwanted := range []string{"49670:127.0.0.1", "49675:10.1.0.4", "445:::", "5353:0.0.0.0"} {
+		if _, ok := byKey[unwanted]; ok {
+			t.Errorf("%s was parsed; only TCP LISTENING rows belong in a scan", unwanted)
+		}
+	}
+}
