@@ -474,12 +474,18 @@ func TestReadsAreFreeWhileSomeoneIsSubscribed(t *testing.T) {
 		t.Fatalf("state.subscribe: %v", e)
 	}
 
+	// state.subscribe replies from the cache and wakes the scanner (contract
+	// §25), so the subscriber's first tick lands asynchronously. A baseline
+	// taken before it finishes counts that tick against the reads that follow,
+	// which is how this test failed on the slower Windows runner.
+	settleScans(t, h)
+
 	reader := h.dial(ctx)
 	var res listResult
 	if e := reader.call("ports.list", rpc.PortsListParams{}, &res); e != nil {
 		t.Fatalf("ports.list: %v", e)
 	}
-	before := h.loop.Status().Scans
+	before := settleScans(t, h)
 
 	// The loop keeps scanning on its own cadence; what must not happen is a
 	// read adding scans of its own. Give the reads no time to be "stale".
@@ -494,6 +500,33 @@ func TestReadsAreFreeWhileSomeoneIsSubscribed(t *testing.T) {
 	if got := h.loop.Status().Scans; got != before {
 		t.Fatalf("forty reads alongside a subscriber cost %d scans, want 0", got-before)
 	}
+}
+
+// settleScans waits until the scan counter has stopped moving and returns it.
+// The loop's own cadence is seconds apart (scanner.BaseInterval), so a counter
+// that has held still for a fifth of a second is between ticks, and the caller
+// has the rest of the interval to do its work in.
+func settleScans(t *testing.T, h *testHarness) int64 {
+	t.Helper()
+	const (
+		poll   = 20 * time.Millisecond
+		stable = 10
+	)
+	deadline := time.Now().Add(10 * time.Second)
+	last, held := h.loop.Status().Scans, 0
+	for time.Now().Before(deadline) {
+		time.Sleep(poll)
+		switch now := h.loop.Status().Scans; {
+		case now != last:
+			last, held = now, 0
+		case held == stable:
+			return now
+		default:
+			held++
+		}
+	}
+	t.Fatalf("the scan counter never settled: still moving at %d", last)
+	return 0
 }
 
 func TestDaemonStatusReportsTheScanCounter(t *testing.T) {
