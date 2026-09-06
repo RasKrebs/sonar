@@ -77,16 +77,14 @@ type DayCount struct {
 	Installs int64  `json:"installs"`
 }
 
-// dialect is the only thing that differs between SQLite and Postgres: the DDL
-// and how a placeholder is spelled. Every statement in this file is written
-// with `?` and rebound on the way out.
+// dialect is the whole difference between SQLite and Postgres: how a
+// placeholder is spelled, and how an auto-assigned id is declared. Every
+// statement in this file is written once with `?` and rebound on the way out,
+// which is what keeps the rollup, the retention window and the stats queries
+// from forking.
 type dialect struct {
-	name   string
-	ddl    []string
-	rebind func(string) string
-	// insertEvent is the one statement whose column list differs, because
-	// SQLite's rowid column and Postgres's BIGSERIAL are declared differently
-	// but both default the id.
+	name       string
+	rebind     func(string) string
 	serialType string
 }
 
@@ -223,7 +221,7 @@ func newSQLStore(db *sql.DB, d dialect, what string) (Storage, error) {
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("connecting to %s: %w", what, err)
+		return nil, fmt.Errorf("connecting to %s (%s): %w", d.name, what, err)
 	}
 	for _, stmt := range schema(d.serialType) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
