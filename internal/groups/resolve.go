@@ -31,6 +31,14 @@ type Registry interface {
 	Run(p state.Port) (run state.Run, ok bool)
 }
 
+// SessionRegistry is the optional half of Registry: a registry that also knows
+// which agent session started a run reports it here, and AttributeWith stamps
+// it onto the port (spec 2 §3, contract §5). A registry that does not
+// implement it simply publishes ports with a null session.
+type SessionRegistry interface {
+	Session(p state.Port) (session state.Session, ok bool)
+}
+
 // PortRuns reads the run attribution the scanner put on the port itself. It is
 // the direct-scan path: no daemon, so `runs.json` is the only registry there is.
 type PortRuns struct{}
