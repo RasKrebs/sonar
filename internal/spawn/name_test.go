@@ -49,14 +49,57 @@ func TestSplitCmd(t *testing.T) {
 		{"", nil},
 	}
 	for _, tc := range cases {
-		got := SplitCmd(tc.in)
-		if len(got) != len(tc.want) {
-			t.Fatalf("SplitCmd(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("SplitCmd(%q) = %q, want %q", tc.in, got, tc.want)
-			}
+		assertSplit(t, SplitCmd(tc.in), tc.want, tc.in)
+	}
+}
+
+// TestSplitCmdUnixEscapes pins the POSIX reading: outside single quotes a
+// backslash escapes whatever follows it.
+func TestSplitCmdUnixEscapes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`/tmp/a\ b/serve --port 3000`, []string{"/tmp/a b/serve", "--port", "3000"}},
+		{`echo "say \"hi\""`, []string{"echo", `say "hi"`}},
+		{`echo 'a\b'`, []string{"echo", `a\b`}},
+		{`echo \\`, []string{"echo", `\`}},
+	}
+	for _, tc := range cases {
+		assertSplit(t, splitCmdFor(tc.in, false), tc.want, tc.in)
+	}
+}
+
+// TestSplitCmdWindowsKeepsBackslashes is the Windows regression: `\` is a path
+// separator there, and treating it as an escape turned
+// `C:\Users\me\listener.exe` into `C:Usersmelistener.exe`, which no `sonar up`
+// could start. Only a quote inside double quotes is escapable, as
+// CommandLineToArgvW reads it.
+func TestSplitCmdWindowsKeepsBackslashes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`C:\Users\me\listener.exe 3000`, []string{`C:\Users\me\listener.exe`, "3000"}},
+		{`"C:\Program Files\app\app.exe" --port 3000`, []string{`C:\Program Files\app\app.exe`, "--port", "3000"}},
+		{`'C:\Users\me\app.exe' serve`, []string{`C:\Users\me\app.exe`, "serve"}},
+		{`app.exe --dir "C:\logs\\" --port 80`, []string{"app.exe", "--dir", `C:\logs\`, "--port", "80"}},
+		{`echo "say \"hi\""`, []string{"echo", `say "hi"`}},
+		{`npm run dev`, []string{"npm", "run", "dev"}},
+	}
+	for _, tc := range cases {
+		assertSplit(t, splitCmdFor(tc.in, true), tc.want, tc.in)
+	}
+}
+
+func assertSplit(t *testing.T, got, want []string, in string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("split(%q) = %q, want %q", in, got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("split(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
