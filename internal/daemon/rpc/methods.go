@@ -439,11 +439,20 @@ type RunsSpawnResult struct {
 
 // ---------------------------------------------------------------- claims ---
 
+// ClaimsAcquireParams is the `claim_port` tool's shape (spec 2 §4). Either a
+// project or an explicit key identifies the claim: the CLI derives both from
+// the git root of its own cwd, which the daemon cannot see.
+//
+// TTLSeconds is the spec's field and wins; TTLMs is kept because the generated
+// schema has always carried it and every other duration on this wire is in
+// milliseconds. Neither set means DefaultTTL (24h).
 type ClaimsAcquireParams struct {
-	Project  string `json:"project"`
-	Worktree string `json:"worktree,omitempty"`
-	Count    int    `json:"count,omitempty"`
-	TTLMs    int64  `json:"ttl_ms,omitempty"`
+	Project    string `json:"project,omitempty"`
+	Worktree   string `json:"worktree,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Count      int    `json:"count,omitempty"`
+	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
+	TTLMs      int64  `json:"ttl_ms,omitempty"`
 }
 
 type ClaimsAcquireResult struct {
