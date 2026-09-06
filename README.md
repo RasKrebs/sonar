@@ -514,10 +514,13 @@ other server and key in the file alone; running it twice changes nothing, and
 `--uninstall` removes exactly what sonar wrote.
 
 `sonar mcp` is that server: a stdio MCP server built into the binary that gives
-an agent the daemon's view of the machine, with `list_ports` and `inspect_port`
-today and actions and resources next. It starts a daemon if none is running and
-reconnects on its own if one goes away; its logs go to stderr, because stdout
-carries the protocol.
+an agent the daemon's view of the machine. It reads with `list_ports` and
+`inspect_port`, waits with `wait_for_port`, picks and reserves ports with
+`next_free_port` and `claim_port`, and answers the rest of an agent's questions
+with `tail_logs`, `health_check`, `dependency_graph`, `port_history` and
+`list_sessions`; actions and resources come next. It starts a daemon if none is
+running and reconnects on its own if one goes away; its logs go to stderr,
+because stdout carries the protocol.
 
 `install skills` writes the bundled skill, which teaches an agent to start
 servers with `sonar start --`, to `sonar wait` instead of sleeping, and to
