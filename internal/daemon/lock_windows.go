@@ -50,3 +50,12 @@ func unlockFile(f *os.File) error {
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0,
 		lockBytesLow, lockBytesHigh, lockRange())
 }
+
+// isLockedOpenError reports whether opening the lock file failed because
+// another process has it locked or open without sharing. Windows refuses the
+// open where Unix would refuse only the lock, and a restart has to read that
+// as "still held, try again" rather than as a broken lock directory.
+func isLockedOpenError(err error) bool {
+	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||
+		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+}

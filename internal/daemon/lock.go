@@ -52,6 +52,14 @@ func AcquireLock(path string) (*Lock, error) {
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		if isLockedOpenError(err) {
+			// Windows can refuse the open itself while another process has the
+			// file locked or opened without sharing, where Unix would let us
+			// open it and only refuse the lock. It is the same answer —
+			// somebody else has it — so it gets the same error, and callers
+			// that retry (WaitForLockRelease) keep retrying.
+			return nil, &ErrAlreadyRunning{PID: LockHolderPID(path), Path: path}
+		}
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
 	if err := lockFile(f); err != nil {
@@ -99,6 +107,11 @@ func (l *Lock) Path() string { return l.path }
 // The lock is taken and immediately released, which is the only honest test
 // that it is free. A lock whose recorded holder is gone is also treated as
 // free, so a stale lock file cannot make restart hang for the whole timeout.
+//
+// On Windows the wait has to survive one more failure mode: opening a file the
+// outgoing daemon still holds fails outright (ERROR_LOCK_VIOLATION or
+// ERROR_SHARING_VIOLATION) rather than blocking. AcquireLock reports those as
+// ErrAlreadyRunning, so they are retried here instead of aborting the restart.
 func WaitForLockRelease(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var last error
