@@ -59,10 +59,11 @@ func serveRun(cmd *cobra.Command, _ []string) error {
 	defer closeLog.Close()
 
 	srv := daemon.New(daemon.Options{
-		Socket:      socket,
-		Version:     selfupdate.Version,
-		IdleTimeout: loadedConfig.Daemon.ResolvedIdleTimeout(),
-		Logger:      logger,
+		Socket:        socket,
+		Version:       selfupdate.Version,
+		IdleTimeout:   loadedConfig.Daemon.ResolvedIdleTimeout(),
+		StatsInterval: loadedConfig.Daemon.ResolvedStatsInterval(),
+		Logger:        logger,
 	})
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

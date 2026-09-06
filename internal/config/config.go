@@ -26,6 +26,16 @@ type Config struct {
 // subscribers and no keepalive connection.
 const DefaultIdleTimeout = 30 * time.Minute
 
+// DefaultStatsInterval and MinStatsInterval bound `daemon.stats_interval`, the
+// cadence of the daemon's stats-only tick. They mirror scanner.StatsInterval
+// and scanner.MinStatsInterval; config does not import the scanner, which
+// would drag the whole port pipeline into every CLI command that reads a
+// config file.
+const (
+	DefaultStatsInterval = 1 * time.Second
+	MinStatsInterval     = 250 * time.Millisecond
+)
+
 // DaemonConfig holds `sonar serve` settings.
 type DaemonConfig struct {
 	// IdleTimeout is a Go duration ("30m", "2h"). "0" disables idle shutdown;
@@ -33,6 +43,12 @@ type DaemonConfig struct {
 	IdleTimeout string `yaml:"idle_timeout"`
 	// LogLevel is debug, info, warn or error. Empty means info.
 	LogLevel string `yaml:"log_level"`
+	// StatsInterval is how often the daemon refreshes per-process cpu/memory
+	// and the machine's own load row while something is subscribed, as a Go
+	// duration ("1s", "500ms"). Empty means DefaultStatsInterval; anything
+	// below MinStatsInterval is clamped to it. It does not affect how often
+	// ports are scanned — that cadence is adaptive and owned by the scanner.
+	StatsInterval string `yaml:"stats_interval"`
 }
 
 // ResolvedIdleTimeout returns the parsed idle timeout, falling back to
@@ -44,6 +60,22 @@ func (d DaemonConfig) ResolvedIdleTimeout() time.Duration {
 	v, err := time.ParseDuration(strings.TrimSpace(d.IdleTimeout))
 	if err != nil || v < 0 {
 		return DefaultIdleTimeout
+	}
+	return v
+}
+
+// ResolvedStatsInterval returns the parsed stats cadence, falling back to
+// DefaultStatsInterval and never returning less than MinStatsInterval.
+func (d DaemonConfig) ResolvedStatsInterval() time.Duration {
+	v, err := time.ParseDuration(strings.TrimSpace(d.StatsInterval))
+	if err != nil || v <= 0 {
+		// Including the unset case. There is no "off": the sampler already
+		// parks itself whenever nothing is subscribed, so a zero here would
+		// only mean a busy loop.
+		return DefaultStatsInterval
+	}
+	if v < MinStatsInterval {
+		return MinStatsInterval
 	}
 	return v
 }
@@ -117,6 +149,10 @@ const template = `# sonar configuration
 #   idle_timeout: 30m
 #   # How much the daemon writes to ~/.config/sonar/daemon.log.
 #   log_level: info     # debug | info | warn | error
+#   # How often cpu, memory and the host load strip refresh while the app (or
+#   # any other subscriber) is watching. Ports are scanned on their own
+#   # adaptive cadence and are not affected. Minimum 250ms.
+#   stats_interval: 1s
 
 # color: true       # set false to disable colored output
 
@@ -197,6 +233,16 @@ func validate(cfg *Config) []string {
 		if d, err := time.ParseDuration(v); err != nil || d < 0 {
 			warnings = append(warnings, fmt.Sprintf("config: invalid daemon.idle_timeout %q — using %s", v, DefaultIdleTimeout))
 			cfg.Daemon.IdleTimeout = ""
+		}
+	}
+
+	if v := strings.TrimSpace(cfg.Daemon.StatsInterval); v != "" {
+		if d, err := time.ParseDuration(v); err != nil || d <= 0 {
+			warnings = append(warnings, fmt.Sprintf("config: invalid daemon.stats_interval %q — using %s", v, DefaultStatsInterval))
+			cfg.Daemon.StatsInterval = ""
+		} else if d < MinStatsInterval {
+			warnings = append(warnings, fmt.Sprintf("config: daemon.stats_interval %q is below the %s minimum — using %s", v, MinStatsInterval, MinStatsInterval))
+			cfg.Daemon.StatsInterval = MinStatsInterval.String()
 		}
 	}
 
