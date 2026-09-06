@@ -95,7 +95,7 @@ func TestSubscriptionIsReissuedOnReconnect(t *testing.T) {
 	var mu sync.Mutex
 	var resumes int
 	deltas := make(chan state.Delta, 4)
-	err := h.server.Daemon().Subscribe(context.Background(), client.SubscribeOptions{},
+	_, err := h.server.Daemon().Subscribe(context.Background(), client.SubscribeOptions{},
 		func(d state.Delta) { deltas <- d },
 		func(state.Snapshot) {
 			mu.Lock()
@@ -120,16 +120,13 @@ func TestSubscriptionIsReissuedOnReconnect(t *testing.T) {
 	if err := h.fake.Restart(); err != nil {
 		t.Fatalf("restarting the fake daemon: %v", err)
 	}
+	// The resume hook fires once the re-issued subscription has its snapshot,
+	// which is a moment after the daemon counts the subscriber.
 	waitFor(t, 10*time.Second, "the subscription to be re-issued", func() bool {
-		return h.fake.Subscribers() == 1
+		mu.Lock()
+		defer mu.Unlock()
+		return h.fake.Subscribers() == 1 && resumes >= 2
 	})
-
-	mu.Lock()
-	got := resumes
-	mu.Unlock()
-	if got < 2 {
-		t.Errorf("the resume hook fired %d times, want it once per connection", got)
-	}
 
 	h.fake.Push(state.Delta{})
 	select {

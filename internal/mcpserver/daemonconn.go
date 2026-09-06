@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -171,29 +172,62 @@ func (d *Daemon) Reconnects() int {
 	return d.reconnects
 }
 
+// StateSub is a handle on a state.subscribe that outlives one connection.
+type StateSub struct {
+	d  *Daemon
+	ps *persistentSub
+}
+
+// Close ends the subscription: it takes it out of the reconnect set and tells
+// the daemon to stop (state.unsubscribe), so the MCP server stops counting as
+// a subscriber. That matters beyond tidiness — a connected subscriber is
+// activity against the daemon's idle timeout (contract §15) — which is why the
+// resource layer holds a subscription only while a client is watching
+// something (contract §30).
+func (s *StateSub) Close(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.d.forget(s.ps)
+	return s.ps.unsubscribe(ctx)
+}
+
 // Subscribe opens a state.subscribe that is re-issued after every reconnect.
 // deltas receives every state.delta; resumed, if set, is called with the fresh
-// snapshot each time the subscription is re-established, which is a
+// snapshot each time the subscription is established, which is a
 // resource-serving layer's cue to re-send ResourceUpdated for every URI it has
 // handed out (spec 1).
+//
+// The handle comes back even when the initial subscribe failed, because the
+// subscription is registered either way: a daemon that is away right now gets
+// it on the next reconnect, and the caller's resumed hook is how they hear
+// about it.
 func (d *Daemon) Subscribe(ctx context.Context, opts client.SubscribeOptions,
-	deltas func(state.Delta), resumed func(state.Snapshot)) error {
+	deltas func(state.Delta), resumed func(state.Snapshot)) (*StateSub, error) {
 
 	ps := &persistentSub{opts: opts, deltas: deltas, resumed: resumed}
 
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
-		return errors.New("mcpserver: the daemon connection is closed")
+		return nil, errors.New("mcpserver: the daemon connection is closed")
 	}
 	c := d.cur
 	d.subs = append(d.subs, ps)
 	d.mu.Unlock()
 
+	handle := &StateSub{d: d, ps: ps}
 	if c == nil {
-		return d.unavailable()
+		return handle, d.unavailable()
 	}
-	return ps.open(ctx, c)
+	return handle, ps.open(ctx, c)
+}
+
+// forget stops re-issuing ps after a reconnect.
+func (d *Daemon) forget(ps *persistentSub) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.subs = slices.DeleteFunc(d.subs, func(other *persistentSub) bool { return other == ps })
 }
 
 // Close disconnects and stops reconnecting.
@@ -348,4 +382,22 @@ func (ps *persistentSub) stop() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// unsubscribe stops the pump and tells the daemon we are done. Unlike stop, it
+// is the deliberate end of a subscription rather than a connection going away,
+// so the daemon hears about it.
+func (ps *persistentSub) unsubscribe(ctx context.Context) error {
+	ps.mu.Lock()
+	sub, cancel := ps.sub, ps.cancel
+	ps.sub, ps.cancel = nil, nil
+	ps.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if sub == nil {
+		return nil
+	}
+	return sub.Unsubscribe(ctx)
 }
