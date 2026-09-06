@@ -95,9 +95,16 @@ func newEnv(t *testing.T) *env {
 	return &env{t: t, bin: bin, home: home, socket: socket}
 }
 
+// waitDelay bounds how long Wait may block on a pipe after the process it was
+// waiting for has exited. A stray grandchild holding the inherited stdout
+// keeps that pipe open forever, so without this a test that has already failed
+// hangs until `go test -timeout` shoots it.
+const waitDelay = 5 * time.Second
+
 // command builds a `sonar` invocation pinned to this env.
 func (e *env) command(args ...string) *exec.Cmd {
 	cmd := exec.Command(e.bin, args...)
+	cmd.WaitDelay = waitDelay
 	cmd.Env = append(os.Environ(),
 		"HOME="+e.home,
 		"USERPROFILE="+e.home,
@@ -114,14 +121,12 @@ func (e *env) serve() *exec.Cmd {
 	cmd := e.command("serve")
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
+	ownProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		e.t.Fatalf("starting sonar serve: %v", err)
 	}
 	e.t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
+		stopCommand(cmd)
 		if e.t.Failed() && out.Len() > 0 {
 			e.t.Logf("daemon output:\n%s", out.String())
 		}

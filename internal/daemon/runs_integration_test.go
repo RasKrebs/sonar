@@ -106,14 +106,15 @@ func TestStartAttributesItsPortToTheGroup(t *testing.T) {
 	start.Dir = e.home
 	var out safeBuffer
 	start.Stdout, start.Stderr = &out, &out
+	ownProcessGroup(start)
 	if err := start.Start(); err != nil {
 		t.Fatalf("sonar start: %v", err)
 	}
 	t.Cleanup(func() {
-		if start.Process != nil {
-			_ = start.Process.Kill()
-			_ = start.Wait()
-		}
+		// The listener is in a process group of its own and holds the pipe
+		// `out` reads from, so the whole tree has to go before Wait can
+		// return.
+		stopCommand(start)
 		if t.Failed() {
 			t.Logf("sonar start output:\n%s", out.String())
 		}
