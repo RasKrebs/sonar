@@ -77,20 +77,9 @@ func EnrichStats(pp []ListeningPort, dockerStats map[string]*DockerStatsEntry) {
 	// Batch native process stats into a single ps call
 	batchEnrichProcessStats(pp)
 
-	// Connection counts — on Windows, fetch netstat once and reuse the output
-	if runtime.GOOS == "windows" {
-		out, err := exec.Command("netstat", "-ano").Output()
-		if err == nil {
-			output := string(out)
-			for i := range pp {
-				pp[i].Connections = countConnectionsNetstat(output, strconv.Itoa(pp[i].Port))
-			}
-		}
-	} else {
-		for i := range pp {
-			pp[i].Connections = countConnections(pp[i].Port)
-		}
-	}
+	// Connection counts, from one listing of the machine's TCP connections
+	// rather than one call per port.
+	applyConnectionCounts(pp)
 }
 
 // DockerStatsEntry holds pre-fetched per-container stats.
@@ -399,11 +388,13 @@ func batchEnrichProcessStats(pp []ListeningPort) {
 
 	samples := SampleProcStats(pids)
 
-	// macOS has no batched thread count: `ps -M` is one fork per pid. It runs
-	// here, on the scan tick, and never on the 1 s stats tick.
+	// macOS reports no thread count in the sampler's `ps`, so it takes a
+	// second (batched) call. It runs here, on the scan tick, and never on the
+	// 1 s stats tick.
 	if runtime.GOOS == "darwin" {
+		threads := countThreadsDarwin(pids)
 		for pid, s := range samples {
-			s.ThreadCount = countThreadsDarwin(pid)
+			s.ThreadCount = threads[pid]
 			samples[pid] = s
 		}
 	}
