@@ -540,7 +540,7 @@ app, and editors.
 ```sh
 sonar serve                  # in the foreground
 sonar serve --detach         # in the background
-sonar daemon status          # pid, uptime, subscribers, scans, capabilities
+sonar daemon status          # pid, uptime, subscribers, scans, intervals
 sonar daemon path            # the socket it listens on
 sonar daemon log -n 50 -f    # what it is doing
 sonar daemon restart
@@ -571,6 +571,17 @@ The daemon stops on its own after 30 minutes with no clients and no
 subscribers. Set `daemon.idle_timeout` in the config file to change that, or
 `0` to keep it running.
 
+Ports are scanned every 2 seconds while something is changing; when nothing is,
+the scanner slows itself down to 5 seconds with a subscriber connected and 10
+seconds without one. `daemon.scan_interval` moves that base — minimum 1s — and
+both ceilings scale with it, so raising it to `5s` backs off to 12.5s and 25s
+rather than pinning the curve at the old caps. `daemon.stats_interval` is the
+separate cadence at which cpu, memory and the host load strip refresh while
+something is subscribed. Both are read when the daemon starts: edit the file,
+then `sonar daemon restart`. `sonar daemon status` prints the values in
+effect (`scan base`, `stats tick`) next to the adaptive interval the scanner is
+on right now.
+
 A subscriber that asks for `include: ["health"]` makes the daemon probe **every
 listening port** on a slower cadence, not only the services that declare a
 `health:` path — those are polled on every tick and reach every subscriber
@@ -599,6 +610,8 @@ list:
 daemon:
   idle_timeout: 30m     # 0 keeps the daemon running
   log_level: info       # debug | info | warn | error
+  scan_interval: 2s     # base port-scan cadence, minimum 1s
+  stats_interval: 1s    # cpu/memory refresh while subscribed, minimum 250ms
 color: true
 services:               # label custom/unknown ports
   9000: php-fpm
