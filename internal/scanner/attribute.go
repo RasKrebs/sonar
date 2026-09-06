@@ -88,7 +88,7 @@ func (l *Loop) sessions(rows []state.Port) []state.SessionRecord {
 func (l *Loop) Invalidate() {
 	l.mu.Lock()
 	l.lastScanAt = time.Time{}
-	l.interval = BaseInterval
+	l.interval = l.base
 	l.mu.Unlock()
 	l.Wake()
 }

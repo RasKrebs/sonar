@@ -46,12 +46,14 @@ func (f *Fake) handleHello(raw json.RawMessage) (any, error) {
 
 func (f *Fake) handleStatus(json.RawMessage) (any, error) {
 	return rpc.DaemonStatusResult{
-		PID:            os.Getpid(),
-		Uptime:         "1m0s",
-		Subscribers:    f.Subscribers(),
-		LastScanAt:     f.Fixture().StartedAt,
-		ScanIntervalMs: 2000,
-		Scans:          1,
+		PID:                os.Getpid(),
+		Uptime:             "1m0s",
+		Subscribers:        f.Subscribers(),
+		LastScanAt:         f.Fixture().StartedAt,
+		ScanIntervalMs:     2000,
+		ScanBaseIntervalMs: 2000,
+		StatsIntervalMs:    1000,
+		Scans:              1,
 	}, nil
 }
 

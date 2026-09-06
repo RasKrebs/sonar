@@ -67,6 +67,7 @@ func serveRun(cmd *cobra.Command, _ []string) error {
 		Version:       selfupdate.Version,
 		IdleTimeout:   loadedConfig.Daemon.ResolvedIdleTimeout(),
 		StatsInterval: loadedConfig.Daemon.ResolvedStatsInterval(),
+		ScanInterval:  loadedConfig.Daemon.ResolvedScanInterval(),
 		Logger:        logger,
 	})
 

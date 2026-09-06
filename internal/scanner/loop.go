@@ -21,14 +21,28 @@ import (
 
 // Timing constants from the spec's "Scanner loop" section.
 const (
-	// BaseInterval is the interval while anything is changing.
+	// BaseInterval is the interval while anything is changing, and the
+	// default `daemon.scan_interval` sets.
 	BaseInterval = 2 * time.Second
+	// MinScanInterval is the floor `daemon.scan_interval` may be set to. One
+	// scan is an `lsof`/`ss`/`netstat` plus a docker round trip; below a
+	// second a machine spends more of itself being measured than run.
+	MinScanInterval = 1 * time.Second
 	// MaxInterval caps the backoff on unchanged scans while the daemon is
-	// serving RPC reads only.
+	// serving RPC reads only. The constant is the ceiling at the default
+	// base; a configured base scales it by IdleMaxFactor.
 	MaxInterval = 10 * time.Second
 	// SubscribedMaxInterval caps the backoff while at least one subscriber is
-	// connected, so a live view never lags a change by more than this.
+	// connected, so a live view never lags a change by more than this. Like
+	// MaxInterval it is the ceiling at the default base, scaled by
+	// SubscribedMaxFactor.
 	SubscribedMaxInterval = 5 * time.Second
+	// SubscribedMaxFactor and IdleMaxFactor scale the two ceilings with the
+	// base interval, so `daemon.scan_interval` moves the whole adaptive curve
+	// rather than only its floor. At the 2 s default they reproduce
+	// SubscribedMaxInterval and MaxInterval exactly.
+	SubscribedMaxFactor = 2.5
+	IdleMaxFactor       = 5
 	// BackoffFactor multiplies the interval after an unchanged scan.
 	BackoffFactor = 1.5
 	// CacheTTL is how long an RPC read may reuse the last scan.
@@ -147,6 +161,13 @@ type Options struct {
 	// inject a fake; production leaves it nil and gets ports.SampleProcStats.
 	SampleStats func(pids []int) map[int]ports.ProcSample
 
+	// ScanInterval overrides the base port-scan cadence
+	// (`daemon.scan_interval`): the interval used while something is changing
+	// and the floor the backoff returns to. Zero means BaseInterval; anything
+	// below MinScanInterval is clamped to it. Both backoff ceilings scale
+	// with it, so the adaptive shape is the same whatever the base.
+	ScanInterval time.Duration
+
 	// StatsInterval overrides the stats-only tick's cadence
 	// (`daemon.stats_interval`). Zero means StatsInterval; anything below
 	// MinStatsInterval is clamped to it.
@@ -160,6 +181,10 @@ type Options struct {
 type Loop struct {
 	opts Options
 	now  func() time.Time
+	// base is the resolved `daemon.scan_interval`: the cadence while
+	// something is changing and the floor the backoff returns to. It is fixed
+	// at construction, so nothing locks to read it.
+	base time.Duration
 
 	wake chan struct{}
 	// statsWake unparks the stats-only tick when a subscriber connects. It is
@@ -291,16 +316,31 @@ func New(opts Options) *Loop {
 	if now == nil {
 		now = time.Now
 	}
+	base := resolveScanInterval(opts.ScanInterval)
 	return &Loop{
 		opts:      opts,
 		now:       now,
+		base:      base,
 		wake:      make(chan struct{}, 1),
 		statsWake: make(chan struct{}, 1),
 		runGate:   make(chan struct{}, 1),
 		rpcGate:   make(chan struct{}, 1),
 		orderGate: make(chan struct{}, 1),
-		interval:  BaseInterval,
+		interval:  base,
 	}
+}
+
+// resolveScanInterval clamps a configured base scan interval. Zero (the unset
+// case) means BaseInterval; there is no "off", because the loop already parks
+// itself whenever nothing is subscribed.
+func resolveScanInterval(d time.Duration) time.Duration {
+	if d <= 0 {
+		return BaseInterval
+	}
+	if d < MinScanInterval {
+		return MinScanInterval
+	}
+	return d
 }
 
 // lock takes one of the loop's channel mutexes and waits as long as it takes.
@@ -525,7 +565,7 @@ func (l *Loop) Run(ctx context.Context) {
 			wait = l.dueIn()
 		}
 		if wait <= 0 {
-			wait = BaseInterval
+			wait = l.base
 		}
 
 		if !timer.Stop() {
@@ -542,7 +582,7 @@ func (l *Loop) Run(ctx context.Context) {
 		case <-l.wake:
 			// A read or a new subscriber: back to the base interval.
 			l.mu.Lock()
-			l.interval = BaseInterval
+			l.interval = l.base
 			l.mu.Unlock()
 		}
 	}
@@ -740,7 +780,7 @@ func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 			// off.
 			next.Seq = prev.Seq
 			l.snap = next
-			l.interval = backoff(l.interval, l.maxIntervalLocked())
+			l.interval = backoff(l.interval, l.base, l.maxIntervalLocked())
 			return next, prev, false
 		}
 		// Only the machine's own load moved. It is published — host load is
@@ -753,7 +793,7 @@ func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 		l.seq++
 		next.Seq = l.seq
 		l.snap = next
-		l.interval = backoff(l.interval, l.maxIntervalLocked())
+		l.interval = backoff(l.interval, l.base, l.maxIntervalLocked())
 		return next, prev, true
 	}
 
@@ -761,7 +801,7 @@ func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 	next.Seq = l.seq
 	l.snap = next
 	l.haveSnap = true
-	l.interval = BaseInterval
+	l.interval = l.base
 	return next, prev, true
 }
 
@@ -873,25 +913,26 @@ func (l *Loop) healthDue() bool {
 	return l.lastHealthAt.IsZero() || l.now().Sub(l.lastHealthAt) >= HealthCadence
 }
 
-// maxIntervalLocked is the ceiling the backoff may reach right now: 5 s while
-// anyone is subscribed, so a live view never lags a change by more than that,
-// and the full 10 s when the daemon only answers RPC reads. Caller holds the
-// mutex.
+// maxIntervalLocked is the ceiling the backoff may reach right now: 2.5x the
+// base while anyone is subscribed, so a live view never lags a change by more
+// than that, and 5x when the daemon only answers RPC reads. At the default 2 s
+// base those are the 5 s and 10 s of the spec. Caller holds the mutex.
 func (l *Loop) maxIntervalLocked() time.Duration {
+	factor := float64(IdleMaxFactor)
 	if l.subs > 0 {
-		return SubscribedMaxInterval
+		factor = SubscribedMaxFactor
 	}
-	return MaxInterval
+	return time.Duration(float64(l.base) * factor)
 }
 
-// backoff multiplies the interval by 1.5, capped at max.
-func backoff(d, max time.Duration) time.Duration {
+// backoff multiplies the interval by 1.5, floored at base and capped at max.
+func backoff(d, base, max time.Duration) time.Duration {
 	next := time.Duration(float64(d) * BackoffFactor)
 	if next > max {
 		return max
 	}
-	if next < BaseInterval {
-		return BaseInterval
+	if next < base {
+		return base
 	}
 	return next
 }
@@ -1284,10 +1325,18 @@ func (l *Loop) snapHasStats() bool {
 // Status is what `daemon.status` reports about the scanner.
 type Status struct {
 	LastScanAt time.Time
+	// IntervalMs is the adaptive cadence right now: somewhere between the
+	// base and whichever ceiling currently applies.
 	IntervalMs int
-	Scans      int64
-	Seq        uint64
-	LastError  error
+	// BaseIntervalMs and StatsIntervalMs are the effective settings behind
+	// it: `daemon.scan_interval` and `daemon.stats_interval` after clamping.
+	// Both are fixed for the life of the daemon, so `daemon.status` is where
+	// you check that an edit to the config file took.
+	BaseIntervalMs  int
+	StatsIntervalMs int
+	Scans           int64
+	Seq             uint64
+	LastError       error
 }
 
 // Status returns the scanner's current counters.
@@ -1295,10 +1344,12 @@ func (l *Loop) Status() Status {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return Status{
-		LastScanAt: l.lastScanAt,
-		IntervalMs: int(l.interval / time.Millisecond),
-		Scans:      l.scans,
-		Seq:        l.seq,
-		LastError:  l.lastErr,
+		LastScanAt:      l.lastScanAt,
+		IntervalMs:      int(l.interval / time.Millisecond),
+		BaseIntervalMs:  int(l.base / time.Millisecond),
+		StatsIntervalMs: int(l.statsInterval() / time.Millisecond),
+		Scans:           l.scans,
+		Seq:             l.seq,
+		LastError:       l.lastErr,
 	}
 }
