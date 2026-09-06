@@ -37,6 +37,21 @@ const (
 	HealthCadence = 10 * time.Second
 	// HealthTimeout bounds a single probe.
 	HealthTimeout = 2 * time.Second
+	// HealthBudget bounds a whole round of opt-in health probes, however many
+	// ports are listening. Ten probes run at once, so without a ceiling a
+	// machine with forty listeners costs four waves of HealthTimeout — and a
+	// write handler's republish is queued behind the scan that pays it
+	// (contract §44).
+	HealthBudget = 4 * time.Second
+	// ConfiguredHealthBudget is the same ceiling for the `.sonar.yaml` health
+	// paths, which are probed on every tick rather than on HealthCadence.
+	ConfiguredHealthBudget = 2 * time.Second
+	// ScanLockBudget bounds how long a handler waits for one of the loop's
+	// gates before it gives up and answers from the last good snapshot. A scan is bounded
+	// (the probes have budgets and the docker calls have timeouts), so
+	// reaching this means the daemon is wedged; the point is that a reply is
+	// still impossible to hang (contract §44).
+	ScanLockBudget = 15 * time.Second
 	// HostStatsTimeout bounds one collection of the machine's own load.
 	HostStatsTimeout = 3 * time.Second
 	// StatsInterval is the fixed cadence of the stats-only tick: per-process
@@ -153,18 +168,45 @@ type Loop struct {
 
 	attr attribution
 
-	// scanMu serializes a whole scan — the OS call, the attribution that
-	// reads the store, the commit into the cache and the publish — against
-	// every other scan. Without it only the commit was serialized, and two
-	// scans could overlap: the tick a read woke could load the rename table
-	// *before* `ports.rename` wrote to it and still commit *after* the
-	// rescan the write triggered, overwriting the renamed snapshot with the
-	// stale one and publishing a delta that put the old display_name back.
-	// Holding it end to end makes the rule "a scan that starts after a write
-	// sees it, and a scan that started before one can never land after it"
-	// true by construction, and keeps delta seq order the same as publish
-	// order.
-	scanMu sync.Mutex
+	// runGate admits one OS scan at a time. It is held from a scan's first
+	// system call to its last, so two scans can never overlap and a slow one
+	// can never commit port rows on top of a newer one's. Only scanning takes
+	// it: a republish and a remote host's rows need no OS call at all.
+	//
+	// It is a buffered channel rather than a sync.Mutex because a handler that
+	// waits for it has to wait *with a deadline* (contract §44).
+	runGate chan struct{}
+
+	// rpcGate does the same for the scans an RPC starts: one at a time, so ten
+	// clients reading at once still cost the machine one scan. It is separate
+	// from runGate on purpose. A `ports.kill` needs a bare port list and gets
+	// it in a moment; the loop's own tick is collecting stats, which means
+	// `docker stats` and a machine-wide `lsof`, and queueing the first behind
+	// the second is what made a dry-run kill take double figures of seconds
+	// (contract §44). The two can overlap because ordering no longer depends
+	// on them not overlapping: attribution and the commit are serialized by
+	// orderGate, and a scan whose OS half is older than the published snapshot
+	// never commits (see commitScan).
+	rpcGate chan struct{}
+
+	// orderGate is what 1A.15's scanMu really guards: the attribution that
+	// reads the store, the commit into the cache and the publish, taken by
+	// everything that publishes a re-attributed snapshot — a scan, a store
+	// write's republish, a remote host's rows changing.
+	//
+	// The rule it buys is unchanged (contract §38): a scan's attribution
+	// happens either wholly before a store write or wholly after it, so the
+	// tick that loaded the rename table before `ports.rename` wrote to it can
+	// no longer commit on top of the write and put the old display_name back.
+	// What changed in 1A.19 is where it starts. It used to be taken before the
+	// OS scan, which meant a rename, a group pin or a "Save color" waited out
+	// `lsof`, `ps`, `docker stats` and a round of health probes before its own
+	// microsecond of work — seconds of latency for a guarantee that only ever
+	// needed the store-reading half. Ordering is about attribution, not about
+	// asking the kernel which sockets are open (contract §44).
+	//
+	// Lock order is runGate, then orderGate, then commitMu; never the reverse.
+	orderGate chan struct{}
 
 	// commitMu is the narrower half of that promise: it is held across the
 	// commit into the cache *and* the publish that follows, by everything
@@ -191,9 +233,15 @@ type Loop struct {
 	// local is the last scan's own rows, before the remote hosts were merged
 	// in. RemoteChanged republishes from it, so a remote host's delta costs
 	// nothing on the local machine: no OS scan, no attribution, no probes.
-	local        state.Rows
+	local state.Rows
+	// lastPorts is the OS half of the last scan, before attribution. Republish
+	// re-attributes it instead of scanning the machine again, which is what
+	// makes a rename or a `.sonar.yaml` write cost microseconds rather than a
+	// full scan (contract §44).
+	lastPorts    []ports.ListeningPort
 	haveSnap     bool
 	lastScanAt   time.Time
+	lastScanFrom time.Time
 	lastHealthAt time.Time
 	interval     time.Duration
 	seq          uint64
@@ -236,9 +284,38 @@ func New(opts Options) *Loop {
 		now:       now,
 		wake:      make(chan struct{}, 1),
 		statsWake: make(chan struct{}, 1),
+		runGate:   make(chan struct{}, 1),
+		rpcGate:   make(chan struct{}, 1),
+		orderGate: make(chan struct{}, 1),
 		interval:  BaseInterval,
 	}
 }
+
+// lock takes one of the loop's channel mutexes and waits as long as it takes.
+// The scan loop itself uses this: it has nobody to answer to.
+func lock(gate chan struct{}) { gate <- struct{}{} }
+
+// lockFor takes one, giving up after d, and reports whether it got it. Every
+// handler-initiated path uses this rather than lock, so a reply can never wait
+// on a gate forever (contract §44).
+func lockFor(gate chan struct{}, d time.Duration) bool {
+	select {
+	case gate <- struct{}{}:
+		return true
+	default:
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case gate <- struct{}{}:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// unlock releases one.
+func unlock(gate chan struct{}) { <-gate }
 
 // osScan is the production scan: the same pipeline `sonar list` runs, so the
 // daemon and the no-daemon path emit byte-identical rows.
@@ -419,11 +496,20 @@ func (l *Loop) Run(ctx context.Context) {
 			}
 		}
 
-		l.scanAndPublish(include)
-
-		l.mu.Lock()
-		wait := l.interval
-		l.mu.Unlock()
+		// A scan an RPC ran a moment ago is this tick's scan. Wake means "the
+		// state you are holding may be stale", and a scan younger than the
+		// current interval is not: without this floor every `ports.kill`,
+		// every `sonar list` that missed the cache and every write woke the
+		// loop into a second full scan, which is one more scan for the next
+		// caller to be queued behind (contract §44).
+		wait := l.dueIn()
+		if wait <= 0 {
+			l.scanAndPublish(include)
+			wait = l.dueIn()
+		}
+		if wait <= 0 {
+			wait = BaseInterval
+		}
 
 		if !timer.Stop() {
 			select {
@@ -449,10 +535,10 @@ func (l *Loop) Run(ctx context.Context) {
 // publishes when something changed. One scan at a time (see scanMu); the
 // publish itself happens inside scanLocked, under commitMu.
 func (l *Loop) scanAndPublish(include Include) {
-	l.scanMu.Lock()
-	defer l.scanMu.Unlock()
+	lock(l.runGate)
+	defer unlock(l.runGate)
 
-	_, prev, _, err := l.scanLocked(include)
+	_, prev, _, err := l.scanLocked(include, Include{})
 	if err != nil {
 		l.opts.Logger.Warn("scan failed, keeping last good state", "error", err)
 		// A scan_error carries no snapshot and takes no seq, so it needs no
@@ -476,13 +562,21 @@ func (l *Loop) publish(prev, next state.Snapshot, events []state.Event) {
 // scanLocked performs a scan and swaps it into the cache. It returns the new
 // snapshot, the one it replaced, and whether anything a client cares about
 // changed.
-func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed bool, err error) {
+//
+// collect is what this scan asks the OS for. carry is what the *subscribers*
+// want the published snapshot to keep but this caller has no reason to pay
+// for: those fields are copied forward from the previous snapshot instead of
+// being collected again (contract §44). The scan loop's own tick passes its
+// demand as collect and nothing as carry; an RPC passes the caller's own
+// include as collect and the subscribers' as carry.
+func (l *Loop) scanLocked(collect, carry Include) (next, prev state.Snapshot, changed bool, err error) {
 	// Read outside the mutex: Demand takes the server's own lock, which the
 	// server holds while calling back into the loop.
 	subs, _ := l.opts.Demand()
-	wantHealth := include.Health && l.healthDue()
+	wantHealth := collect.Health && l.healthDue()
 
-	pp, err := l.opts.Scan(include)
+	startedAt := l.now()
+	pp, err := l.opts.Scan(collect)
 	if err != nil {
 		l.mu.Lock()
 		l.lastErr = err
@@ -494,8 +588,20 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	}
 
 	if wantHealth {
-		ports.EnrichHealth(pp, HealthTimeout)
+		ports.EnrichHealth(pp, HealthTimeout, HealthBudget)
 	}
+
+	// The machine's own load, read before the ordering gate: on macOS it forks
+	// `ps`, and nothing about it is ordered against a store write.
+	host := l.collectHost()
+
+	// Everything from here on is the ordered half of the scan: the attribution
+	// that reads the store, the commit, and the publish. It is serialized
+	// against every store write's republish and against every other publisher,
+	// and the publish rides inside it so a later seq can never reach a client
+	// first (contract §38, §44).
+	lock(l.orderGate)
+	defer unlock(l.orderGate)
 
 	// Resolve every port's group with the pins the store holds, apply the
 	// stored renames and build the group collection, all before the snapshot
@@ -504,54 +610,94 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 
 	sessionRows := l.sessions(rows)
 
-	// The machine's own load, read outside the mutex: on macOS it forks `ps`.
-	host := l.collectHost()
-
 	// Configured health comes after attribution because it is the groups that
 	// say which port has a `health:` path. It runs on every tick regardless of
 	// `include`: a health path in a `.sonar.yaml` is part of what the service
-	// is, not an opt-in statistic (step 1A.7).
-	probeConfigured(rows, groupRows, l.opts.Probe)
+	// is, not an opt-in statistic (step 1A.7). Its budget is what keeps this
+	// short enough to sit inside the ordering gate.
+	probeConfigured(rows, groupRows, l.opts.Probe, ConfiguredHealthBudget)
 
-	// Everything from here on is the commit: the point at which this scan
-	// becomes the published state. It is serialized against every other
-	// publisher, and the publish rides inside it so a later seq can never
-	// reach a client first (contract §38).
 	l.commitMu.Lock()
 	defer l.commitMu.Unlock()
 
-	next, prev, changed = l.commitScan(subs, include, wantHealth, rows, groupRows, sessionRows, host)
+	next, prev, changed = l.commitScan(commit{
+		subs:      subs,
+		collect:   collect,
+		carry:     carry,
+		health:    wantHealth,
+		startedAt: startedAt,
+		pp:        pp,
+		rows:      rows,
+		groups:    groupRows,
+		sessions:  sessionRows,
+		host:      host,
+	})
 	if changed {
 		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
 	}
 	return next, prev, changed, nil
 }
 
+// commit is one finished scan on its way into the cache.
+type commit struct {
+	subs      int
+	collect   Include
+	carry     Include
+	health    bool
+	startedAt time.Time
+	pp        []ports.ListeningPort
+	rows      []state.Port
+	groups    []state.Group
+	sessions  []state.SessionRecord
+	host      state.Host
+}
+
 // commitScan swaps a finished scan into the cache and adapts the interval.
-// Caller holds scanMu and commitMu; this takes l.mu for the swap itself.
-func (l *Loop) commitScan(
-	subs int, include Include, wantHealth bool,
-	rows []state.Port, groupRows []state.Group, sessionRows []state.SessionRecord,
-	host state.Host,
-) (next, prev state.Snapshot, changed bool) {
+// Caller holds the ordering gate and commitMu; this takes l.mu for the swap
+// itself.
+func (l *Loop) commitScan(c commit) (next, prev state.Snapshot, changed bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.subs = subs
+	l.subs = c.subs
 	prev = l.snap
-	if include.Health && !wantHealth {
-		// Between health cadences, carry the previous probe results forward so
-		// a port does not flicker between "checked" and "unknown".
-		carryHealth(prev.Ports, rows)
-	}
+	rows, groupRows := c.rows, c.groups
 
 	l.scans++
-	l.lastScanAt = l.now()
 	l.lastErr = nil
-	if wantHealth {
+	if l.haveSnap && c.startedAt.Before(l.lastScanFrom) {
+		// Superseded. This scan asked the OS what was listening before the
+		// snapshot on the wire was captured, so committing it would put back
+		// ports a newer scan has already seen go — the "no going backwards"
+		// half of contract §38, now enforced at the commit rather than by
+		// forbidding two scans to overlap at all (contract §44).
+		return prev, prev, false
+	}
+
+	// Carry forward every probe result this scan did not take: between health
+	// cadences, for a configured probe the round's budget cut short, and for a
+	// scan an RPC started that had no reason to pay for a subscriber's health
+	// (contract §44). Without it a port flickers between "checked" and
+	// "unknown" on the wire.
+	carryHealth(prev.Ports, rows, (c.collect.Health || c.carry.Health) && !c.health)
+
+	// Same for stats. A scan an RPC started collects none unless the caller
+	// asked, so it copies the subscribers' last readings across rather than
+	// publishing a snapshot with the numbers stripped out — and the 1 s stats
+	// tick refreshes them within the second anyway (contract §42).
+	if c.carry.Stats && !c.collect.Stats {
+		carryStats(prev.Ports, rows)
+	}
+	withStats := c.collect.Stats || c.carry.Stats
+
+	l.lastScanAt = l.now()
+	l.lastScanFrom = c.startedAt
+	l.lastPorts = c.pp
+	if c.health {
 		l.lastHealthAt = l.lastScanAt
 	}
 
+	host := c.host
 	host.Ports, host.Groups = len(rows), len(groupRows)
 	host.LastSeen = l.lastScanAt.Format(time.RFC3339)
 
@@ -560,7 +706,7 @@ func (l *Loop) commitScan(
 	local := state.Rows{
 		Ports:    rows,
 		Groups:   groupRows,
-		Sessions: sessionRows,
+		Sessions: c.sessions,
 		Hosts:    []state.Host{host},
 	}.Tag(state.LocalhostName).Normalize()
 	l.local = local
@@ -570,7 +716,7 @@ func (l *Loop) commitScan(
 		DaemonVersion: l.opts.DaemonVersion,
 	})
 
-	if l.haveSnap && !snapshotChanged(prev, next, include.Stats) {
+	if l.haveSnap && !snapshotChanged(prev, next, withStats) {
 		if !hostChanged(prev, next) {
 			// Nothing to publish: keep the previous seq and back the interval
 			// off.
@@ -616,8 +762,8 @@ func (l *Loop) commitScan(
 // nothing tells the subscriber a host appeared. It still wakes the loop, so
 // the local half follows.
 func (l *Loop) RemoteChanged() {
-	l.scanMu.Lock()
-	defer l.scanMu.Unlock()
+	lock(l.orderGate)
+	defer unlock(l.orderGate)
 	l.commitMu.Lock()
 	defer l.commitMu.Unlock()
 
@@ -691,6 +837,17 @@ func hostChanged(prev, next state.Snapshot) bool {
 	return len(d.Added) > 0 || len(d.Updated) > 0 || len(d.Removed) > 0
 }
 
+// dueIn is how long until the next scan is due: the current interval minus the
+// age of the last scan, whoever ran it. Zero or less means now.
+func (l *Loop) dueIn() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.lastScanAt.IsZero() {
+		return 0
+	}
+	return l.interval - l.now().Sub(l.lastScanAt)
+}
+
 // healthDue reports whether the health cadence has elapsed.
 func (l *Loop) healthDue() bool {
 	l.mu.Lock()
@@ -734,7 +891,13 @@ func snapshotChanged(prev, next state.Snapshot, withStats bool) bool {
 
 // carryHealth copies health results from the previous snapshot onto rows that
 // were not probed this tick.
-func carryHealth(prev []state.Port, next []state.Port) {
+//
+// all says whether to carry every result or only the configured ones. A
+// `.sonar.yaml` health path is state rather than an opt-in statistic
+// (contract §22), so its last verdict is always better than the "unknown" a
+// skipped probe would publish; an opt-in probe is only carried while somebody
+// is still asking for health.
+func carryHealth(prev []state.Port, next []state.Port, all bool) {
 	if len(prev) == 0 {
 		return
 	}
@@ -743,10 +906,37 @@ func carryHealth(prev []state.Port, next []state.Port) {
 		byKey[prev[i].Key()] = prev[i].Health
 	}
 	for i := range next {
-		if next[i].Health == nil {
-			if h, ok := byKey[next[i].Key()]; ok {
-				next[i].Health = h
-			}
+		if next[i].Health != nil {
+			continue
+		}
+		h, ok := byKey[next[i].Key()]
+		if !ok || h == nil {
+			continue
+		}
+		if all || h.Configured {
+			next[i].Health = h
+		}
+	}
+}
+
+// carryStats copies the previous snapshot's stats onto rows that were not
+// sampled this scan, keyed the same way health is. A port that appeared in
+// this scan and has no previous reading keeps a null `stats`; the 1 s stats
+// tick fills it in on its next pass.
+func carryStats(prev []state.Port, next []state.Port) {
+	if len(prev) == 0 {
+		return
+	}
+	byKey := make(map[string]*state.Stats, len(prev))
+	for i := range prev {
+		byKey[prev[i].Key()] = prev[i].Stats
+	}
+	for i := range next {
+		if next[i].Stats != nil {
+			continue
+		}
+		if st, ok := byKey[next[i].Key()]; ok {
+			next[i].Stats = st
 		}
 	}
 }
@@ -843,13 +1033,132 @@ func (l *Loop) Rescan(include Include) (state.Snapshot, error) {
 	return localOnly(snap), err
 }
 
-// scanNow is the uncached half of both: one scan under scanMu, published
-// before it returns.
-func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
-	l.scanMu.Lock()
-	defer l.scanMu.Unlock()
+// Republish makes a store or `.sonar.yaml` write visible on the wire without
+// scanning the machine (contract §44).
+//
+// The write changed how the ports the daemon already knows are *named and
+// grouped*, not which ports exist, so re-running attribution over the last
+// scan's own OS rows answers it exactly. It takes the scan lock, so it still
+// cannot interleave with a scan and §38's rule holds: a scan that started
+// before the write commits first and this publish supersedes it, a scan that
+// starts after it sees the write. What it no longer does is make a "Save"
+// button wait for `lsof`, `ps` and `docker stats`.
+//
+// It wakes the loop on the way out, so a real scan follows and picks up
+// anything that started or stopped meanwhile. Before the first scan, or if the
+// lock cannot be had inside ScanLockBudget, it falls back to Rescan and to
+// leaving the change for the next tick respectively; the second case means the
+// daemon is wedged and is reported as an error rather than a hung reply.
+func (l *Loop) Republish() error {
+	if !lockFor(l.orderGate, ScanLockBudget) {
+		l.Wake()
+		return fmt.Errorf("scanner busy for more than %s; the change is saved and the next scan will publish it", ScanLockBudget)
+	}
+	l.mu.Lock()
+	pp, have := l.lastPorts, l.haveSnap
+	l.mu.Unlock()
+	if !have || len(pp) == 0 {
+		// Nothing to re-attribute yet: fall back to a real scan, which is
+		// what this used to do unconditionally.
+		unlock(l.orderGate)
+		_, err := l.Rescan(Include{})
+		return err
+	}
+	defer unlock(l.orderGate)
+	defer l.Wake()
 
-	next, prev, _, err := l.scanLocked(l.withDemand(include))
+	subs, carry := l.opts.Demand()
+	rows, groupRows := l.attribute(pp)
+	sessionRows := l.sessions(rows)
+	probeConfigured(rows, groupRows, l.opts.Probe, ConfiguredHealthBudget)
+
+	l.commitMu.Lock()
+	defer l.commitMu.Unlock()
+
+	next, prev, changed := l.commitRepublish(subs, carry, rows, groupRows, sessionRows)
+	if changed {
+		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
+	}
+	return nil
+}
+
+// commitRepublish swaps a re-attributed snapshot into the cache. It is
+// commitScan minus everything that belongs to an OS scan: it does not touch
+// the scan counters, `lastScanAt`, the interval or the machine's load row, so
+// the RPC cache TTL and `daemon status` read exactly what they would have if
+// the write had never happened. Caller holds the ordering gate and commitMu.
+func (l *Loop) commitRepublish(
+	subs int, carry Include,
+	rows []state.Port, groupRows []state.Group, sessionRows []state.SessionRecord,
+) (next, prev state.Snapshot, changed bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.subs = subs
+	prev = l.snap
+
+	carryHealth(prev.Ports, rows, true)
+	carryStats(prev.Ports, rows)
+
+	host := l.localhostRow(prev.Hosts)
+	host.Ports, host.Groups = len(rows), len(groupRows)
+
+	local := state.Rows{
+		Ports:    rows,
+		Groups:   groupRows,
+		Sessions: sessionRows,
+		Hosts:    []state.Host{host},
+	}.Tag(state.LocalhostName).Normalize()
+
+	next = local.Append(l.remoteRows()).Into(state.Snapshot{
+		At:            l.now().Format(time.RFC3339),
+		DaemonVersion: l.opts.DaemonVersion,
+	})
+	if !snapshotChanged(prev, next, true) && !hostChanged(prev, next) {
+		// A write that changed nothing a client can see publishes nothing and
+		// burns no seq, the same rule the stats tick follows.
+		return prev, prev, false
+	}
+
+	l.local = local
+	l.seq++
+	next.Seq = l.seq
+	l.snap = next
+	return next, prev, true
+}
+
+// localhostRow is this machine's row as the last publisher left it, or the
+// identity row when there is none.
+func (l *Loop) localhostRow(hosts []state.Host) state.Host {
+	for i := range hosts {
+		if state.IsLocalhost(hosts[i].Name) {
+			return hosts[i]
+		}
+	}
+	return l.identityRow()
+}
+
+// scanNow is the uncached half of both: one scan under the run gate, published
+// before it returns.
+//
+// A scan that *started* after this call did is already the answer — it saw
+// everything this caller could have seen — so waiting for the one in flight
+// and then running a second is pure duplication. Coalescing onto it is what
+// keeps `ports.kill` to one scan's wait rather than two (contract §44).
+func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
+	asked := l.now()
+	if !lockFor(l.rpcGate, ScanLockBudget) {
+		// Wedged: the last good snapshot beats a reply that never comes.
+		l.opts.Logger.Warn("scanner busy, serving the last snapshot", "waited", ScanLockBudget)
+		return l.CachedAll(), nil
+	}
+	defer unlock(l.rpcGate)
+
+	if snap, ok := l.scannedSince(asked, include); ok {
+		return snap, nil
+	}
+
+	next, prev, _, err := l.scanLocked(include, l.demandInclude())
 	if err != nil {
 		if prev.Seq > 0 {
 			// A failed rescan still serves the last good state.
@@ -858,6 +1167,25 @@ func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
 		return state.Snapshot{}, err
 	}
 	return next, nil
+}
+
+// scannedSince reports the cached snapshot when a scan that began at or after
+// t has already committed one that carries what the caller asked for. Health
+// never coalesces: the probes run on their own cadence, so "a scan happened"
+// says nothing about whether it probed.
+func (l *Loop) scannedSince(t time.Time, include Include) (state.Snapshot, bool) {
+	if include.Health {
+		return state.Snapshot{}, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.haveSnap || l.lastScanFrom.Before(t) {
+		return state.Snapshot{}, false
+	}
+	if include.Stats && !l.snapHasStats() {
+		return state.Snapshot{}, false
+	}
+	return l.snap, true
 }
 
 // cached returns the cached snapshot when it is younger than CacheTTL and
@@ -870,17 +1198,18 @@ func (l *Loop) cached(include Include) (state.Snapshot, bool) {
 	return l.snap, fresh && covers
 }
 
-// withDemand widens an RPC caller's include with what the subscribers want.
-// A scan started by a read is published like any other, so it has to collect
-// what a tick would: without this a `sonar list` in the middle of a subscribed
-// session would publish a snapshot with the stats stripped out, and every
-// subscriber that opted into them would see them blink away and back.
-func (l *Loop) withDemand(include Include) Include {
+// demandInclude is what the subscribers want a published snapshot to keep.
+//
+// A scan started by a read is published like any other, so it must not drop
+// what a tick would have carried: without this a `sonar list` in the middle of
+// a subscribed session would publish a snapshot with the stats stripped out,
+// and every subscriber that opted into them would see them blink away and
+// back. It used to be *collected* again, which put `docker stats` and a round
+// of health probes on the critical path of every kill and every write; it is
+// copied forward now instead (contract §44).
+func (l *Loop) demandInclude() Include {
 	_, want := l.opts.Demand()
-	return Include{
-		Stats:  include.Stats || want.Stats,
-		Health: include.Health || want.Health,
-	}
+	return want
 }
 
 // snapHasStats reports whether the cached snapshot carries stats. Caller holds

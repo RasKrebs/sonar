@@ -101,7 +101,7 @@ func afterKill(req *Request, dryRun bool) {
 	if dryRun {
 		return
 	}
-	republish(req.Runtime)
+	rescanAfterKill(req.Runtime)
 }
 
 // killSnapshot is the state selectors and group members are resolved against.
@@ -111,6 +111,13 @@ func afterKill(req *Request, dryRun bool) {
 // the direct `sonar kill` path, scanning at the moment it is asked, never does.
 // A kill is rare and deliberate; one scan is the right price for acting on what
 // is listening now.
+//
+// The scan it asks for is bare. A kill needs the pid and port of what is
+// listening, never a health verdict or a cpu reading, so it does not inherit a
+// subscriber's `include` — the published snapshot carries those forward
+// instead of collecting them again (contract §44). That is the difference
+// between a dry run answering in a moment and one waiting out `docker stats`
+// and a round of health probes.
 func killSnapshot(req *Request) (state.Snapshot, error) {
 	snap, err := req.Runtime.Scanner.Rescan(scanner.Include{})
 	if err != nil {
