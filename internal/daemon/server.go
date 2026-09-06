@@ -111,8 +111,9 @@ func New(opts Options) *Server {
 	s.loop = opts.Scanner
 	if s.loop == nil {
 		s.loop = scanner.New(scanner.Options{
-			DaemonVersion: opts.Version,
-			Logger:        opts.Logger,
+			DaemonVersion:   opts.Version,
+			ProtocolVersion: rpc.ProtocolVersion,
+			Logger:          opts.Logger,
 		})
 	}
 	s.loop.SetDemand(s.demand)
@@ -535,7 +536,8 @@ func emptyDelta(d state.Delta) bool {
 		len(d.Groups.Added) == 0 && len(d.Groups.Updated) == 0 && len(d.Groups.Removed) == 0 &&
 		len(d.Tunnels.Added) == 0 && len(d.Tunnels.Updated) == 0 && len(d.Tunnels.Removed) == 0 &&
 		len(d.Proxies.Added) == 0 && len(d.Proxies.Updated) == 0 && len(d.Proxies.Removed) == 0 &&
-		len(d.Sessions.Added) == 0 && len(d.Sessions.Updated) == 0 && len(d.Sessions.Removed) == 0
+		len(d.Sessions.Added) == 0 && len(d.Sessions.Updated) == 0 && len(d.Sessions.Removed) == 0 &&
+		len(d.Hosts.Added) == 0 && len(d.Hosts.Updated) == 0 && len(d.Hosts.Removed) == 0
 }
 
 // filterSnapshot strips the enrichments this subscriber did not ask for, so
@@ -554,6 +556,13 @@ func filterSnapshot(snap state.Snapshot, include scanner.Include) state.Snapshot
 	}
 	if snap.Sessions == nil {
 		snap.Sessions = []state.SessionRecord{}
+	}
+	// `hosts` is never filtered. A machine's load is state the daemon
+	// collects for itself on every tick, not an enrichment a subscriber opts
+	// into, so it reaches every subscriber whatever their `include` — the
+	// rule contract §22 set for configured health.
+	if snap.Hosts == nil {
+		snap.Hosts = []state.Host{}
 	}
 	return snap
 }

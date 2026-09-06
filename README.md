@@ -414,6 +414,27 @@ sonar list --no-daemon --json
 # check
 ```
 
+### `sonar host`
+
+```sh
+sonar host          # cpu, load, memory and disk of the machine sonar watches
+sonar host --json
+```
+
+```sh
+sonar host
+# check
+```
+
+The daemon measures its own machine on the scan cadence and publishes it as the
+`localhost` row of the snapshot's `hosts` collection: os and kernel, uptime, cpu
+percent, load average, memory and the disk holding `/`. CPU percent is the work
+done between two scans, so it is null until the daemon has scanned twice; a
+figure a platform cannot produce — the load average on Windows, which has none —
+is null rather than zero. Registered remote hosts join the same table in
+milestone 3. The command needs a running daemon: it is the daemon that holds the
+previous sample a percentage is measured against.
+
 ### The daemon
 
 One background process scans ports, resolves groups, polls health, keeps the

@@ -69,6 +69,7 @@ func (f *Fake) snapshot() state.Snapshot {
 		Tunnels:       []state.Tunnel{},
 		Proxies:       []state.Proxy{},
 		Sessions:      orEmpty(f.fixture.Sessions),
+		Hosts:         orEmpty(f.fixture.Hosts),
 	}
 }
 

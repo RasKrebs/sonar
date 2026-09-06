@@ -8,11 +8,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/groups"
+	"github.com/raskrebs/sonar/internal/hoststats"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
 )
@@ -35,6 +37,8 @@ const (
 	HealthCadence = 10 * time.Second
 	// HealthTimeout bounds a single probe.
 	HealthTimeout = 2 * time.Second
+	// HostStatsTimeout bounds one collection of the machine's own load.
+	HostStatsTimeout = 3 * time.Second
 )
 
 // Include is the per-subscriber opt-in from `state.subscribe {include}`.
@@ -54,9 +58,12 @@ type Publisher func(prev, next state.Snapshot, events []state.Event)
 // Options configures a Loop. Only Scan is defaulted; the rest may be zero.
 type Options struct {
 	DaemonVersion string
-	Logger        *slog.Logger
-	Demand        Demand
-	Publish       Publisher
+	// ProtocolVersion is the wire version published on the localhost row of
+	// the `hosts` collection. The daemon sets it; a bare Loop leaves it empty.
+	ProtocolVersion string
+	Logger          *slog.Logger
+	Demand          Demand
+	Publish         Publisher
 
 	// Store persists renames, group pins, known `.sonar.yaml` roots and the
 	// port history ring. Nil means the loop scans without a database.
@@ -72,6 +79,12 @@ type Options struct {
 	// daemon installs it from an OnStart hook, after the loop exists. Nil
 	// publishes an empty collection.
 	Sessions func(ports []state.Port) []state.SessionRecord
+
+	// HostStats collects the machine's own load once per tick — cpu, load,
+	// memory, disk, uptime. Tests inject a fake; production leaves it nil and
+	// gets hoststats.Collect, whose CPU percent is a delta across the scan
+	// interval and therefore needs the same collector every tick.
+	HostStats func(ctx context.Context) (state.Host, error)
 
 	// Scan overrides the OS scan. Tests inject a fake; production leaves it nil
 	// and gets ports.Scan + docker.EnrichPorts + ports.Enrich.
@@ -141,6 +154,9 @@ func New(opts Options) *Loop {
 	}
 	if opts.Probe == nil {
 		opts.Probe = ports.ProbeHealth
+	}
+	if opts.HostStats == nil {
+		opts.HostStats = hoststats.New().Collect
 	}
 	now := opts.Now
 	if now == nil {
@@ -224,6 +240,10 @@ func (l *Loop) Cached() state.Snapshot {
 			Tunnels:       []state.Tunnel{},
 			Proxies:       []state.Proxy{},
 			Sessions:      []state.SessionRecord{},
+			// Even before the first scan `hosts` names this machine: a client
+			// that subscribes at startup must not have to special-case an
+			// empty collection to find localhost.
+			Hosts: []state.Host{l.identityRow()},
 		}
 	}
 	return l.snap
@@ -340,6 +360,9 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 
 	sessionRows := l.sessions(rows)
 
+	// The machine's own load, read outside the mutex: on macOS it forks `ps`.
+	host := l.collectHost()
+
 	// Configured health comes after attribution because it is the groups that
 	// say which port has a `health:` path. It runs on every tick regardless of
 	// `include`: a health path in a `.sonar.yaml` is part of what the service
@@ -364,6 +387,9 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		l.lastHealthAt = l.lastScanAt
 	}
 
+	host.Ports, host.Groups = len(rows), len(groupRows)
+	host.LastSeen = l.lastScanAt.Format(time.RFC3339)
+
 	next = state.Snapshot{
 		At:            l.lastScanAt.Format(time.RFC3339),
 		DaemonVersion: l.opts.DaemonVersion,
@@ -374,14 +400,31 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		Tunnels:  []state.Tunnel{},
 		Proxies:  []state.Proxy{},
 		Sessions: sessionRows,
+		// One row until step 3A.2 registers remote hosts.
+		Hosts: []state.Host{host},
 	}
 
 	if l.haveSnap && !snapshotChanged(prev, next, include.Stats) {
-		// Nothing to publish: keep the previous seq and back the interval off.
-		next.Seq = prev.Seq
+		if !hostChanged(prev, next) {
+			// Nothing to publish: keep the previous seq and back the interval
+			// off.
+			next.Seq = prev.Seq
+			l.snap = next
+			l.interval = backoff(l.interval, l.maxIntervalLocked())
+			return next, prev, false, nil
+		}
+		// Only the machine's own load moved. It is published — host load is
+		// state, not an opt-in statistic, so it reaches every subscriber
+		// whatever their `include` (contract §22's rule for configured
+		// health) — but it does not snap the interval back to the base. CPU
+		// percent moves on almost every tick, and letting it reset the
+		// backoff would pin a subscribed daemon to a full port scan every two
+		// seconds forever.
+		l.seq++
+		next.Seq = l.seq
 		l.snap = next
 		l.interval = backoff(l.interval, l.maxIntervalLocked())
-		return next, prev, false, nil
+		return next, prev, true, nil
 	}
 
 	l.seq++
@@ -390,6 +433,46 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	l.haveSnap = true
 	l.interval = BaseInterval
 	return next, prev, true, nil
+}
+
+// collectHost reads this machine's load for the tick. A failure is not a scan
+// failure: the row is published anyway, with the reason attached and every
+// load field null, because `hosts` always names localhost.
+func (l *Loop) collectHost() state.Host {
+	ctx, cancel := context.WithTimeout(context.Background(), HostStatsTimeout)
+	defer cancel()
+
+	h, err := l.opts.HostStats(ctx)
+	if err != nil {
+		l.opts.Logger.Warn("host stats failed", "error", err)
+		reason := err.Error()
+		h.StatusReason = &reason
+	}
+	h.Name, h.Address, h.Status = state.LocalhostName, state.LocalhostName, state.HostConnected
+	h.DaemonVersion, h.ProtocolVersion = l.opts.DaemonVersion, l.opts.ProtocolVersion
+	return h
+}
+
+// identityRow is the localhost row before any load has been collected: who
+// this daemon is, with every measurement still null.
+func (l *Loop) identityRow() state.Host {
+	return state.Host{
+		Name:            state.LocalhostName,
+		Address:         state.LocalhostName,
+		Status:          state.HostConnected,
+		DaemonVersion:   l.opts.DaemonVersion,
+		ProtocolVersion: l.opts.ProtocolVersion,
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		LastSeen:        l.now().Format(time.RFC3339),
+	}
+}
+
+// hostChanged reports whether the `hosts` collection moved between two
+// snapshots.
+func hostChanged(prev, next state.Snapshot) bool {
+	d := state.DiffHosts(prev.Hosts, next.Hosts)
+	return len(d.Added) > 0 || len(d.Updated) > 0 || len(d.Removed) > 0
 }
 
 // healthDue reports whether the health cadence has elapsed.

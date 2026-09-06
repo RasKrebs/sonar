@@ -33,6 +33,34 @@
         "removed"
       ]
     },
+    "ChangeHost": {
+      "properties": {
+        "added": {
+          "items": {
+            "$ref": "#/definitions/Host"
+          },
+          "type": "array"
+        },
+        "updated": {
+          "items": {
+            "$ref": "#/definitions/Host"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "added",
+        "updated",
+        "removed"
+      ]
+    },
     "ChangePort": {
       "properties": {
         "added": {
@@ -482,6 +510,9 @@
         },
         "sessions": {
           "$ref": "#/definitions/ChangeSessionRecord"
+        },
+        "hosts": {
+          "$ref": "#/definitions/ChangeHost"
         }
       },
       "type": "object",
@@ -493,7 +524,8 @@
         "groups",
         "tunnels",
         "proxies",
-        "sessions"
+        "sessions",
+        "hosts"
       ]
     },
     "Docker": {
@@ -1388,6 +1420,163 @@
         "pid",
         "display_name",
         "group"
+      ]
+    },
+    "Host": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "connecting",
+            "connected",
+            "unreachable",
+            "outdated",
+            "incompatible"
+          ]
+        },
+        "status_reason": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "daemon_version": {
+          "type": "string"
+        },
+        "protocol_version": {
+          "type": "string"
+        },
+        "latency_ms": {
+          "type": "integer"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "uptime_s": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cpu_percent": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "load": {
+          "oneOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_used_bytes": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_total_bytes": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disk_used_bytes": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disk_total_bytes": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disk_path": {
+          "type": "string"
+        },
+        "ports": {
+          "type": "integer"
+        },
+        "groups": {
+          "type": "integer"
+        },
+        "last_seen": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name",
+        "address",
+        "status",
+        "status_reason",
+        "daemon_version",
+        "protocol_version",
+        "latency_ms",
+        "os",
+        "arch",
+        "kernel",
+        "uptime_s",
+        "cpu_percent",
+        "load",
+        "memory_used_bytes",
+        "memory_total_bytes",
+        "disk_used_bytes",
+        "disk_total_bytes",
+        "disk_path",
+        "ports",
+        "groups",
+        "last_seen"
       ]
     },
     "Include": {
@@ -2999,6 +3188,12 @@
             "$ref": "#/definitions/SessionRecord"
           },
           "type": "array"
+        },
+        "hosts": {
+          "items": {
+            "$ref": "#/definitions/Host"
+          },
+          "type": "array"
         }
       },
       "type": "object",
@@ -3011,7 +3206,8 @@
         "groups",
         "tunnels",
         "proxies",
-        "sessions"
+        "sessions",
+        "hosts"
       ]
     },
     "StateSnapshotParams": {

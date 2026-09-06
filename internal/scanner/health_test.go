@@ -47,6 +47,7 @@ func healthLoop(t *testing.T, dir string, port int) (*Loop, *[]state.Event, *syn
 	var seen []state.Event
 
 	l := New(Options{
+		HostStats:     fixedHost,
 		DaemonVersion: "test",
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{{
@@ -159,6 +160,7 @@ func TestNoHealthPathMeansNoProbe(t *testing.T) {
 	writeConfig(t, dir, "name: plain\nservices:\n  - name: api\n    port: "+strconv.Itoa(port)+"\n")
 
 	l := New(Options{
+		HostStats:     fixedHost,
 		DaemonVersion: "test",
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{{

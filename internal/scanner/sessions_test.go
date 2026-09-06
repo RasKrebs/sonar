@@ -40,6 +40,7 @@ func TestScanStampsPortSessionAndPublishesTheCollection(t *testing.T) {
 	reg := sessionRegistry{pid: 11, session: agent}
 
 	l := New(Options{
+		HostStats: fixedHost,
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{
 				{Port: 3000, PID: 11, Process: "python3", Command: "python3 -m http.server"},
@@ -84,7 +85,7 @@ func TestScanStampsPortSessionAndPublishesTheCollection(t *testing.T) {
 // Without a provider the collection is an empty array, never null: the wire
 // shape is fixed whether or not anything owns sessions in this build.
 func TestSnapshotSessionsAreNeverNull(t *testing.T) {
-	l := New(Options{Scan: func(Include) ([]ports.ListeningPort, error) { return nil, nil }})
+	l := New(Options{HostStats: fixedHost, Scan: func(Include) ([]ports.ListeningPort, error) { return nil, nil }})
 	snap, err := l.Snapshot(Include{})
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)

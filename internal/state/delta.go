@@ -1,8 +1,8 @@
 package state
 
 // Change is one collection's diff. Added and Updated carry full objects;
-// Removed carries keys (Port.Key() for ports, Name for groups, ID for the
-// rest). All three always marshal as arrays, never null.
+// Removed carries keys (Port.Key() for ports, Name for groups and hosts, ID
+// for the rest). All three always marshal as arrays, never null.
 type Change[T any] struct {
 	Added   []T      `json:"added"`
 	Updated []T      `json:"updated"`
@@ -19,6 +19,7 @@ type Delta struct {
 	Tunnels         Change[Tunnel]        `json:"tunnels"`
 	Proxies         Change[Proxy]         `json:"proxies"`
 	Sessions        Change[SessionRecord] `json:"sessions"`
+	Hosts           Change[Host]          `json:"hosts"`
 }
 
 // Event is a discrete notification, sent alongside deltas when a subscriber
