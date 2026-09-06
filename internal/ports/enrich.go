@@ -28,6 +28,13 @@ func Enrich(pp []ListeningPort) {
 	for i := range pp {
 		if info, ok := commands[pp[i].PID]; ok {
 			pp[i].Command = info.command
+			// Windows learns the parent from the same CIM query that fetched
+			// the command line, so the ancestry walk costs no second process
+			// table. Elsewhere this is 0 and enrichDisplayNameSignals fills
+			// PPID from the `ps -A` table it builds anyway.
+			if info.ppid > 0 {
+				pp[i].PPID = info.ppid
+			}
 			// started_at is never gated by --stats: the contract publishes it
 			// on every row (contract §21). EnrichStats refines the same field
 			// with the raw ps lstart it parses anyway.
@@ -100,6 +107,7 @@ type DockerStatsEntry struct {
 type procInfo struct {
 	command   string
 	startedAt string // RFC3339, "" when ps did not report a parsable time
+	ppid      int    // 0 when the source did not report a parent
 }
 
 // batchGetCommands fetches full command lines and start times for all PIDs in a
@@ -248,8 +256,12 @@ func batchGetCommandsWindows(pidStrs []string) map[int]procInfo {
 	}
 	filter := strings.Join(conditions, " or ")
 
+	// ParentProcessId rides along on the query that was already being made:
+	// Windows has no `ps -A` to build a process table from, and spawning a
+	// second PowerShell per scan to learn one parent pid would cost more than
+	// everything else the scan does put together.
 	psCmd := fmt.Sprintf(
-		"Get-CimInstance Win32_Process -Filter '%s' | Select-Object ProcessId,@{N='StartedAt';E={$_.CreationDate.ToString('o')}},CommandLine | ConvertTo-Csv -NoTypeInformation",
+		"Get-CimInstance Win32_Process -Filter '%s' | Select-Object ProcessId,ParentProcessId,@{N='StartedAt';E={$_.CreationDate.ToString('o')}},CommandLine | ConvertTo-Csv -NoTypeInformation",
 		filter,
 	)
 
@@ -264,22 +276,37 @@ func batchGetCommandsWindows(pidStrs []string) map[int]procInfo {
 		return result
 	}
 
-	// CSV columns: "ProcessId","StartedAt","CommandLine"
+	result = parseCIMProcesses(records)
+	rememberScanParents(result)
+	return result
+}
+
+// parseCIMProcesses reads the CSV Get-CimInstance produced. Columns:
+// "ProcessId","ParentProcessId","StartedAt","CommandLine".
+//
+// A row with no command line still counts: on Windows the command line is the
+// field most often withheld (another user's process, a protected one), and
+// dropping the row with it would throw away the parent pid and the start time
+// that did come back.
+func parseCIMProcesses(records [][]string) map[int]procInfo {
+	result := make(map[int]procInfo, len(records))
 	for i, record := range records {
 		if i == 0 {
 			continue // skip header
 		}
-		if len(record) < 3 {
+		if len(record) < 4 {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
 		if err != nil {
 			continue
 		}
-		cmd := strings.TrimSpace(record[2])
-		if cmd != "" {
-			result[pid] = procInfo{command: cmd, startedAt: parseStartTime(record[1])}
+		ppid, _ := strconv.Atoi(strings.TrimSpace(record[1]))
+		cmd := strings.TrimSpace(record[3])
+		if cmd == "" && ppid <= 0 {
+			continue
 		}
+		result[pid] = procInfo{command: cmd, startedAt: parseStartTime(record[2]), ppid: ppid}
 	}
 	return result
 }
