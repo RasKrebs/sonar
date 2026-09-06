@@ -65,3 +65,32 @@ type Host struct {
 
 // Key is the delta identity: the host name.
 func (h Host) Key() string { return h.Name }
+
+// PrefixKey is the delta-key rule for a row that may have come from a remote
+// host: local rows (host empty or "localhost") keep the key they have always
+// had, and only a remote row is namespaced with "<host>/". Keeping the local
+// form byte-identical is what lets a client built against the pre-3A.2
+// protocol keep working without a major bump (remote-hosts spec, decision 1);
+// the row's own `host` field is the disambiguator for everyone else.
+func PrefixKey(host, key string) string {
+	if IsLocalhost(host) {
+		return key
+	}
+	return host + "/" + key
+}
+
+// IsLocalhost reports whether a row's `host` names the daemon's own machine.
+// The empty string counts: a row built by a client that predates the field, or
+// by the CLI's direct scan, is a local row.
+func IsLocalhost(host string) bool {
+	return host == "" || host == LocalhostName
+}
+
+// HostOf is IsLocalhost's other half: the name a row should be filtered under,
+// with the empty string normalised to "localhost".
+func HostOf(host string) string {
+	if host == "" {
+		return LocalhostName
+	}
+	return host
+}

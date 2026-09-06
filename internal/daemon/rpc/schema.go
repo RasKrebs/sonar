@@ -130,7 +130,7 @@ type Document struct {
 func namedTypes() []any {
 	return []any{
 		state.Port{}, state.Group{}, state.Tunnel{}, state.Proxy{},
-		state.Session{}, state.SessionRecord{}, state.Claim{},
+		state.Session{}, state.SessionRecord{}, state.Claim{}, state.Host{},
 		state.Snapshot{}, state.Delta{}, state.Event{}, state.Service{},
 		state.Stats{}, state.Health{}, state.Docker{}, state.Run{},
 		state.KillResult{},
@@ -327,6 +327,10 @@ func init() {
 	Describe("remote.scan", RemoteScanParams{}, RemoteScanResult{}, nil, nil)
 	Describe("remote.install", RemoteInstallParams{}, RemoteInstallResult{},
 		RemoteInstallChunk{}, RemoteInstallEnd{})
+	Describe("remote.list", Empty{}, RemoteListResult{}, nil, nil)
+	Describe("remote.add", RemoteAddParams{}, RemoteAddResult{}, nil, nil)
+	Describe("remote.remove", RemoteRemoveParams{}, OKResult{}, nil, nil)
+	Describe("remote.call", RemoteCallParams{}, RemoteCallResult{}, nil, nil)
 
 	// Expose (spec 3).
 	Describe("expose.create", ExposeCreateParams{}, ExposeCreateResult{}, nil, nil)

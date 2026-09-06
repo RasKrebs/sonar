@@ -377,11 +377,11 @@ func (s *Server) demand() (int, scanner.Include) {
 // asked for arrive in the first delta rather than delaying the reply by a scan.
 // The delta's seq is the cached snapshot's seq plus one, so the §15 resync rule
 // is unchanged.
-func (s *Server) subscribe(c *Conn, id json.RawMessage, include scanner.Include, events bool) {
+func (s *Server) subscribe(c *Conn, id json.RawMessage, include scanner.Include, events bool, hosts state.HostFilter) {
 	s.subsMu.Lock()
 	snap := s.loop.Cached()
-	c.subscribed, c.include, c.events = true, include, events
-	filtered := filterSnapshot(snap, include)
+	c.subscribed, c.include, c.events, c.hosts = true, include, events, hosts
+	filtered := filterSnapshot(snap, include, hosts)
 	raw, err := json.Marshal(filtered)
 	if err == nil {
 		msg, mErr := json.Marshal(rpc.Response{JSONRPC: rpc.Version, ID: id, Result: raw})
@@ -401,7 +401,7 @@ func (s *Server) subscribe(c *Conn, id json.RawMessage, include scanner.Include,
 // unsubscribe drops a connection's subscription.
 func (s *Server) unsubscribe(c *Conn) {
 	s.subsMu.Lock()
-	c.subscribed, c.include, c.events = false, scanner.Include{}, false
+	c.subscribed, c.include, c.events, c.hosts = false, scanner.Include{}, false, state.HostFilter{}
 	s.subsMu.Unlock()
 	s.touch()
 	s.loop.Wake()
@@ -419,17 +419,18 @@ func (s *Server) publish(prev, next state.Snapshot, events []state.Event) {
 		events = append(s.takePending(), events...)
 	}
 
-	deltaCache := map[scanner.Include][]byte{}
-	eventCache := map[scanner.Include][][]byte{}
+	deltaCache := map[viewKey][]byte{}
+	eventCache := map[viewKey][][]byte{}
 
 	for _, c := range s.conns {
 		if !c.subscribed {
 			continue
 		}
-		msg, ok := deltaCache[c.include]
+		view := viewKey{include: c.include, hosts: c.hosts.Key()}
+		msg, ok := deltaCache[view]
 		if !ok {
-			msg = marshalDelta(prev, next, c.include)
-			deltaCache[c.include] = msg
+			msg = marshalDelta(prev, next, c.include, c.hosts)
+			deltaCache[view] = msg
 		}
 		if msg != nil {
 			c.enqueue(msg)
@@ -437,15 +438,23 @@ func (s *Server) publish(prev, next state.Snapshot, events []state.Event) {
 		if !c.events || len(events) == 0 {
 			continue
 		}
-		msgs, ok := eventCache[c.include]
+		msgs, ok := eventCache[view]
 		if !ok {
-			msgs = marshalEvents(events, c.include)
-			eventCache[c.include] = msgs
+			msgs = marshalEvents(events, c.include, c.hosts)
+			eventCache[view] = msgs
 		}
 		for _, m := range msgs {
 			c.enqueue(m)
 		}
 	}
+}
+
+// viewKey identifies one subscriber's view of the stream: what it opted into
+// collecting and which hosts it asked to see. The delta is marshalled once per
+// distinct view rather than once per subscriber.
+type viewKey struct {
+	include scanner.Include
+	hosts   string
 }
 
 // listeningForEvents reports whether any subscriber asked for events. Caller
@@ -459,19 +468,25 @@ func (s *Server) listeningForEvents() bool {
 	return false
 }
 
+// BroadcastEvent sends one event to every subscriber that asked for events and
+// can see the host it happened on. The remote-host bridge uses it to forward a
+// remote daemon's events into the local stream.
+func (s *Server) BroadcastEvent(ev state.Event) { s.broadcastEvent(ev) }
+
 // broadcastEvent sends one event to every subscriber that asked for events.
 func (s *Server) broadcastEvent(ev state.Event) {
 	s.subsMu.RLock()
 	defer s.subsMu.RUnlock()
-	cache := map[scanner.Include][][]byte{}
+	cache := map[viewKey][][]byte{}
 	for _, c := range s.conns {
 		if !c.subscribed || !c.events {
 			continue
 		}
-		msgs, ok := cache[c.include]
+		view := viewKey{include: c.include, hosts: c.hosts.Key()}
+		msgs, ok := cache[view]
 		if !ok {
-			msgs = marshalEvents([]state.Event{ev}, c.include)
-			cache[c.include] = msgs
+			msgs = marshalEvents([]state.Event{ev}, c.include, c.hosts)
+			cache[view] = msgs
 		}
 		for _, m := range msgs {
 			c.enqueue(m)
@@ -482,7 +497,9 @@ func (s *Server) broadcastEvent(ev state.Event) {
 // marshalDelta builds one state.delta notification for a given include set.
 // It returns nil when the delta is empty for this subscriber, so a client that
 // asked for neither stats nor health is not woken by a stats-only tick.
-func marshalDelta(prev, next state.Snapshot, include scanner.Include) []byte {
+func marshalDelta(prev, next state.Snapshot, include scanner.Include, hosts state.HostFilter) []byte {
+	prev = state.FilterSnapshot(prev, hosts)
+	next = state.FilterSnapshot(next, hosts)
 	var d state.Delta
 	if include.Stats {
 		d = state.DiffWithStats(prev, next)
@@ -508,10 +525,14 @@ func marshalDelta(prev, next state.Snapshot, include scanner.Include) []byte {
 	return msg
 }
 
-// marshalEvents builds one state.event notification per event.
-func marshalEvents(events []state.Event, include scanner.Include) [][]byte {
+// marshalEvents builds one state.event notification per event, skipping the
+// ones that happened on a host this subscriber did not ask to see.
+func marshalEvents(events []state.Event, include scanner.Include, hosts state.HostFilter) [][]byte {
 	out := make([][]byte, 0, len(events))
 	for _, ev := range events {
+		if !hosts.Allows(ev.Host) {
+			continue
+		}
 		if ev.Port != nil {
 			p := filterPort(*ev.Port, include)
 			ev.Port = &p
@@ -543,7 +564,8 @@ func emptyDelta(d state.Delta) bool {
 // filterSnapshot strips the enrichments this subscriber did not ask for, so
 // `include` is honest even when another subscriber made the scanner collect
 // them.
-func filterSnapshot(snap state.Snapshot, include scanner.Include) state.Snapshot {
+func filterSnapshot(snap state.Snapshot, include scanner.Include, hosts state.HostFilter) state.Snapshot {
+	snap = state.FilterSnapshot(snap, hosts)
 	snap.Ports = filterPorts(snap.Ports, include)
 	if snap.Groups == nil {
 		snap.Groups = []state.Group{}
@@ -557,10 +579,12 @@ func filterSnapshot(snap state.Snapshot, include scanner.Include) state.Snapshot
 	if snap.Sessions == nil {
 		snap.Sessions = []state.SessionRecord{}
 	}
-	// `hosts` is never filtered. A machine's load is state the daemon
-	// collects for itself on every tick, not an enrichment a subscriber opts
-	// into, so it reaches every subscriber whatever their `include` — the
-	// rule contract §22 set for configured health.
+	// `hosts` is never filtered by `include`. A machine's load is state the
+	// daemon collects for itself on every tick, not an enrichment a
+	// subscriber opts into, so it reaches every subscriber whatever their
+	// `include` — the rule contract §22 set for configured health. The
+	// `hosts` *filter* above is a different question: it decides which
+	// machines this subscriber asked about at all.
 	if snap.Hosts == nil {
 		snap.Hosts = []state.Host{}
 	}

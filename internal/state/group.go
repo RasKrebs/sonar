@@ -23,6 +23,8 @@ type Service struct {
 // Group is a set of ports that belong to one project. Members are port
 // numbers; clients join them against the ports list.
 type Group struct {
+	// Host names the machine this group lives on (see Port.Host).
+	Host       string      `json:"host"`
 	Name       string      `json:"name"`
 	Source     GroupSource `json:"source" jsonschema:"enum=auto,enum=file,enum=manual,enum=start"`
 	RootDir    *string     `json:"root_dir" jsonschema:"nullable"`
@@ -32,10 +34,15 @@ type Group struct {
 	Services   []Service   `json:"services"`
 }
 
+// Key is the delta identity: the group name, namespaced by host for a remote
+// row.
+func (g Group) Key() string { return PrefixKey(g.Host, g.Name) }
+
 // Tunnel and Proxy are owned by spec 3; Claim and SessionRecord by spec 2.
 // Declared here so the snapshot has a stable shape from day one; fields follow
 // those specs.
 type Tunnel struct {
+	Host          string  `json:"host"`
 	ID            string  `json:"id"`
 	TargetPort    int     `json:"target_port"`
 	TargetGroup   *string `json:"target_group" jsonschema:"nullable"`
@@ -54,9 +61,13 @@ type Tunnel struct {
 	Requests      int64   `json:"requests"`
 }
 
+// Key is the delta identity: the tunnel id, namespaced by host.
+func (t Tunnel) Key() string { return PrefixKey(t.Host, t.ID) }
+
 // Proxy is a daemon-owned TCP (or HTTP) forwarder. It also appears in the
 // ports collection as a row with Type == TypeProxy.
 type Proxy struct {
+	Host        string `json:"host"`
 	ID          string `json:"id"`
 	ServicePort int    `json:"service_port"`
 	ListenPort  int    `json:"listen_port"`
@@ -68,10 +79,14 @@ type Proxy struct {
 	Requests    int64  `json:"requests"`
 }
 
+// Key is the delta identity: the proxy id, namespaced by host.
+func (p Proxy) Key() string { return PrefixKey(p.Host, p.ID) }
+
 // SessionRecord is a Session plus the aggregate counts the sessions collection
 // carries.
 type SessionRecord struct {
 	Session
+	Host      string `json:"host"`
 	FirstSeen string `json:"first_seen"`
 	LastSeen  string `json:"last_seen"`
 	Runs      int    `json:"runs"`
@@ -79,6 +94,9 @@ type SessionRecord struct {
 	Groups    int    `json:"groups"`
 	Active    bool   `json:"active"`
 }
+
+// Key is the delta identity: the session id, namespaced by host.
+func (s SessionRecord) Key() string { return PrefixKey(s.Host, s.ID) }
 
 // Claim is owned by spec 2 (slice M5); declared here so the schema has the
 // definition contract §6 requires from day one.
