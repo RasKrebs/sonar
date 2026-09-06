@@ -123,6 +123,19 @@ type Loop struct {
 
 	attr attribution
 
+	// scanMu serializes a whole scan — the OS call, the attribution that
+	// reads the store, the commit into the cache and the publish — against
+	// every other scan. Without it only the commit was serialized, and two
+	// scans could overlap: the tick a read woke could load the rename table
+	// *before* `ports.rename` wrote to it and still commit *after* the
+	// rescan the write triggered, overwriting the renamed snapshot with the
+	// stale one and publishing a delta that put the old display_name back.
+	// Holding it end to end makes the rule "a scan that starts after a write
+	// sees it, and a scan that started before one can never land after it"
+	// true by construction, and keeps delta seq order the same as publish
+	// order.
+	scanMu sync.Mutex
+
 	mu           sync.Mutex
 	subs         int
 	snap         state.Snapshot
@@ -303,8 +316,11 @@ func (l *Loop) Run(ctx context.Context) {
 }
 
 // scanAndPublish runs one scan, updates the cache, adapts the interval and
-// publishes when something changed.
+// publishes when something changed. One scan at a time (see scanMu).
 func (l *Loop) scanAndPublish(include Include) {
+	l.scanMu.Lock()
+	defer l.scanMu.Unlock()
+
 	next, prev, changed, err := l.scanLocked(include)
 	if err != nil {
 		l.opts.Logger.Warn("scan failed, keeping last good state", "error", err)
@@ -594,19 +610,37 @@ func (l *Loop) nowRFC3339() string { return l.now().Format(time.RFC3339) }
 // caller asked for; otherwise it scans now. Either way it wakes the loop, so
 // reading state snaps the interval back to the base (spec, "Scanner loop").
 func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
-	l.mu.Lock()
-	fresh := l.haveSnap && l.now().Sub(l.lastScanAt) < CacheTTL
-	covers := !include.Stats || l.snapHasStats()
-	snap := l.snap
-	l.mu.Unlock()
-
 	defer l.Wake()
 
-	if fresh && covers {
+	if snap, ok := l.cached(include); ok {
 		return snap, nil
 	}
+	return l.scanNow(include)
+}
 
-	next, prev, changed, err := l.scanLocked(include)
+// Rescan scans now whatever the cache says, publishes the change it finds and
+// only then returns. It is what a write path calls: `ports.rename`,
+// `groups.assign` and the group config writes need the delta carrying the
+// change to be on the wire before their own reply is (contract §18), and a
+// kill needs its selectors resolved against what is listening this instant.
+//
+// It is not Invalidate + Snapshot. That pair has a window between the two
+// calls: a tick landing in it refreshes lastScanAt from a scan that began
+// before the write, Snapshot then finds the cache "fresh" and serves it, and
+// the write reaches no one until the next tick — up to SubscribedMaxInterval
+// later. Rescan closes the window by holding scanMu across both halves.
+func (l *Loop) Rescan(include Include) (state.Snapshot, error) {
+	defer l.Wake()
+	return l.scanNow(include)
+}
+
+// scanNow is the uncached half of both: one scan under scanMu, published
+// before it returns.
+func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
+	l.scanMu.Lock()
+	defer l.scanMu.Unlock()
+
+	next, prev, changed, err := l.scanLocked(l.withDemand(include))
 	if err != nil {
 		if prev.Seq > 0 {
 			// A failed rescan still serves the last good state.
@@ -618,6 +652,29 @@ func (l *Loop) Snapshot(include Include) (state.Snapshot, error) {
 		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
 	}
 	return next, nil
+}
+
+// cached returns the cached snapshot when it is younger than CacheTTL and
+// already carries everything the caller asked for.
+func (l *Loop) cached(include Include) (state.Snapshot, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fresh := l.haveSnap && l.now().Sub(l.lastScanAt) < CacheTTL
+	covers := !include.Stats || l.snapHasStats()
+	return l.snap, fresh && covers
+}
+
+// withDemand widens an RPC caller's include with what the subscribers want.
+// A scan started by a read is published like any other, so it has to collect
+// what a tick would: without this a `sonar list` in the middle of a subscribed
+// session would publish a snapshot with the stats stripped out, and every
+// subscriber that opted into them would see them blink away and back.
+func (l *Loop) withDemand(include Include) Include {
+	_, want := l.opts.Demand()
+	return Include{
+		Stats:  include.Stats || want.Stats,
+		Health: include.Health || want.Health,
+	}
 }
 
 // snapHasStats reports whether the cached snapshot carries stats. Caller holds

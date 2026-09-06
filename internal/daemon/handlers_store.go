@@ -160,12 +160,20 @@ func handleConfigPath(_ context.Context, _ *Request) (any, error) {
 	return rpc.ConfigPathResult{Path: config.Path()}, nil
 }
 
-// republish makes a write visible immediately: the cached scan is dropped and
-// a fresh one is published, so the delta carrying the new name reaches
-// subscribers before the caller's own next `sonar list`.
+// republish makes a write visible before its own reply is. It scans and
+// publishes synchronously, so by the time the handler returns the delta
+// carrying the change is already queued on every subscriber's connection —
+// ahead of this call's response, which the same writer queues afterwards —
+// and the caller's own next read is served from a snapshot that has it.
+//
+// Contract §18 only asks that a rename or an assign take effect "in the next
+// publish", with an immediate rescan so the caller sees it. Replying *after*
+// that publish is what turns "the next delta carries the rename" from a race
+// into a guarantee: a subscriber cannot receive the acknowledgement before the
+// delta that justifies it, and a client that reads straight after the reply
+// cannot be served the state from before its own write.
 func republish(rt *Runtime) {
-	rt.Scanner.Invalidate()
-	if _, err := rt.Scanner.Snapshot(scanner.Include{}); err != nil {
+	if _, err := rt.Scanner.Rescan(scanner.Include{}); err != nil {
 		rt.Logger.Warn("rescanning after a write", "error", err)
 	}
 }

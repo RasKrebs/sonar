@@ -112,8 +112,7 @@ func afterKill(req *Request, dryRun bool) {
 // A kill is rare and deliberate; one scan is the right price for acting on what
 // is listening now.
 func killSnapshot(req *Request) (state.Snapshot, error) {
-	req.Runtime.Scanner.Invalidate()
-	snap, err := req.Runtime.Scanner.Snapshot(scanner.Include{})
+	snap, err := req.Runtime.Scanner.Rescan(scanner.Include{})
 	if err != nil {
 		return state.Snapshot{}, rpc.NewError(rpc.CodeInternal, "scan failed: "+err.Error(),
 			"check `sonar daemon log` for the scanner error")
