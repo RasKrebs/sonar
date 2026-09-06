@@ -9,43 +9,17 @@ import (
 )
 
 // batchGetCwds returns pid -> cwd for the given PIDs using a single lsof call.
-// lsof -a -p PID,PID,... -d cwd -Fpn produces records like:
-//
-//	p1234
-//	n/Users/me/project
-//	p5678
-//	n/var/empty
+// A non-zero exit is not a failure: see cwdsFromLsof.
 func batchGetCwds(pids []int) map[int]string {
-	result := make(map[int]string)
 	if len(pids) == 0 {
-		return result
+		return map[int]string{}
 	}
 	pidStrs := make([]string, len(pids))
 	for i, p := range pids {
 		pidStrs[i] = strconv.Itoa(p)
 	}
 	out, err := exec.Command("lsof", "-a", "-p", strings.Join(pidStrs, ","), "-d", "cwd", "-Fpn").Output()
-	if err != nil {
-		return result
-	}
-	var current int
-	for _, line := range strings.Split(string(out), "\n") {
-		if line == "" {
-			continue
-		}
-		switch line[0] {
-		case 'p':
-			pid, err := strconv.Atoi(line[1:])
-			if err == nil {
-				current = pid
-			}
-		case 'n':
-			if current != 0 {
-				result[current] = line[1:]
-			}
-		}
-	}
-	return result
+	return cwdsFromLsof(out, err)
 }
 
 // batchGetServiceUnits returns pid -> launchd label using one launchctl list call.
