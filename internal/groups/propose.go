@@ -75,8 +75,17 @@ func proposeService(p ports.ListeningPort, root string, index *Index, used map[s
 	return svc
 }
 
-// portDir is the directory a port belongs to: the process cwd, or the Compose
-// project's working directory for a container.
+// portDir is the directory a port belongs to: the process cwd, the Compose
+// project's working directory for a container, or — when neither is at hand —
+// the project root the resolver already attributed the port to.
+//
+// The last arm is what lets the daemon propose from a published snapshot.
+// state.Port carries no Compose working directory (the resolver consumes it
+// before a row is published), but it does carry project_root, which for a
+// Compose container *is* the git root above that working directory. Without it
+// a `groups.init` served by the daemon would silently drop every container the
+// CLI proposes. It only fires when the two better answers are absent, so the
+// direct path is unchanged.
 func portDir(p ports.ListeningPort, index *Index) string {
 	if p.Cwd != "" {
 		return p.Cwd
@@ -86,7 +95,7 @@ func portDir(p ports.ListeningPort, index *Index) string {
 			return dir
 		}
 	}
-	return ""
+	return p.ProjectRoot
 }
 
 // proposeCmd guesses the command that would bring this service back up.
