@@ -132,6 +132,32 @@ func TestStderrCarriesTheLogs(t *testing.T) {
 	}
 }
 
+// TestSocketFlagOverridesTheEnvironment: `--socket` is what a client config
+// uses to point one agent at a daemon other than the default.
+func TestSocketFlagOverridesTheEnvironment(t *testing.T) {
+	e := newRealEnv(t)
+
+	cmd := exec.Command(e.bin, "mcp", "--socket", e.socket, "--log-level", "debug")
+	// SONAR_SOCKET is deliberately absent: only the flag says where to dial.
+	cmd.Env = append(os.Environ(),
+		"HOME="+e.home, "USERPROFILE="+e.home, "XDG_RUNTIME_DIR=", "SONAR_NO_HINTS=1")
+	cmd.Stderr = &stderrSink{e: e}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "sonar-itest", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatalf("connecting with --socket: %v\nstderr:\n%s", err, e.stderr())
+	}
+	defer session.Close()
+
+	if _, err := session.ListTools(context.Background(), nil); err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	if !strings.Contains(e.stderr(), e.socket) {
+		t.Errorf("the server did not report the socket it was pointed at:\n%s", e.stderr())
+	}
+}
+
 // ------------------------------------------------------------------ setup ---
 
 type realEnv struct {
