@@ -233,15 +233,6 @@ func (f *Fake) portReady(rows []state.Port, port int, wantHTTP bool) bool {
 	return false
 }
 
-func stillPending(targets []int, pending map[int]bool) []int {
-	out := []int{}
-	for _, port := range targets {
-		if pending[port] {
-			out = append(out, port)
-		}
-	}
-	return out
-}
 
 // handlePortsHealth answers from each row's fixture health. A port nothing is
 // listening on still gets a row — the daemon's rule, so a caller asking about a

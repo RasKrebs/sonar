@@ -812,10 +812,10 @@ func renderWait(out WaitForPortOutput, path *string) string {
 	fmt.Fprintf(&b, "%d of %d %s %s after %s\n", len(out.Ready), total,
 		plural(total, "port is", "ports are"), how, elapsed)
 	if len(out.Ready) > 0 {
-		fmt.Fprintf(&b, "ready: %s\n", joinInts(out.Ready))
+		fmt.Fprintf(&b, "ready: %s\n", joinIntsInOrder(out.Ready))
 	}
 	if len(out.TimedOut) > 0 {
-		fmt.Fprintf(&b, "timed out: %s\n", joinInts(out.TimedOut))
+		fmt.Fprintf(&b, "timed out: %s\n", joinIntsInOrder(out.TimedOut))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -827,7 +827,7 @@ func renderFreePorts(ports []int) string {
 	if len(ports) == 1 {
 		return fmt.Sprintf("port %d is free", ports[0])
 	}
-	return fmt.Sprintf("ports %s are free", joinInts(ports))
+	return fmt.Sprintf("ports %s are free", joinIntsInOrder(ports))
 }
 
 func renderClaim(out ClaimPortOutput) string {
@@ -835,7 +835,7 @@ func renderClaim(out ClaimPortOutput) string {
 		return "no ports are claimed for " + out.Key
 	}
 	return fmt.Sprintf("%s claims %s until %s",
-		out.Key, joinInts(out.Ports), dash(out.ExpiresAt))
+		out.Key, joinIntsInOrder(out.Ports), dash(out.ExpiresAt))
 }
 
 func renderRelease(out ClaimPortOutput) string {
@@ -966,7 +966,7 @@ func renderSessions(sessions []state.SessionRecord, activeOnly bool) string {
 	return b.String()
 }
 
-func joinInts(v []int) string {
+func joinIntsInOrder(v []int) string {
 	parts := make([]string, 0, len(v))
 	for _, n := range v {
 		parts = append(parts, strconv.Itoa(n))
