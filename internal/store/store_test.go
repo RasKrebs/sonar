@@ -206,3 +206,45 @@ func TestIsCorruptionIgnoresOrdinaryErrors(t *testing.T) {
 		t.Error("sql.ErrNoRows counted as corruption")
 	}
 }
+
+// TestCloseLeavesNoWALSidecars: a closed database has to be one file. The WAL
+// and shared-memory sidecars are rewritten by whichever pooled connection
+// closes last, so a caller that closes the store and then removes the
+// directory — a stopping daemon, a test's t.TempDir cleanup — otherwise races
+// a `-wal` recreated behind the delete and fails with "directory not empty".
+func TestCloseLeavesNoWALSidecars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sonar.db")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Write something, so there is a WAL to leave behind.
+	if err := s.SetRename("port:8123", "storefront"); err != nil {
+		t.Fatalf("SetRename: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "-wal") || strings.HasSuffix(e.Name(), "-shm") {
+			t.Errorf("%s survived Close; the database should be a single file", e.Name())
+		}
+	}
+
+	// The data is still there: leaving WAL must checkpoint, not discard.
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	if name, _, err := again.GetRename("port:8123"); err != nil || name != "storefront" {
+		t.Errorf("rename after reopen = %q (%v), want storefront", name, err)
+	}
+}
