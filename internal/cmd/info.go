@@ -169,7 +169,7 @@ func inspectPort(ctx context.Context, port int, bindIP string) (*ports.Listening
 	docker.EnrichPorts(enriched)
 	ports.Enrich(enriched)
 	ports.EnrichStats(enriched, docker.AllContainerStatsAsEntries())
-	ports.EnrichHealth(enriched, 2*time.Second)
+	ports.EnrichHealth(enriched, 2*time.Second, 0)
 	return &enriched[0], nil
 }
 

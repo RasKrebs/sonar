@@ -10,7 +10,7 @@ import (
 
 // maxHealthProbes bounds how many configured health checks run at once, the
 // same ceiling the opt-in probe uses.
-const maxHealthProbes = 10
+const maxHealthProbes = ports.MaxProbes
 
 // Probe is one health check. Options.Probe replaces it for tests; production
 // is ports.ProbeHealth.
@@ -24,13 +24,24 @@ type Probe func(host string, port int, path string, timeout time.Duration) ports
 // the service *is*, not a statistic a client may or may not want, so the
 // daemon polls it as part of state (step 1A.7). Everything else about it is the
 // same probe — one HTTP GET, HealthTimeout, ten in flight.
-func probeConfigured(rows []state.Port, gg []state.Group, probe Probe) {
+func probeConfigured(rows []state.Port, gg []state.Group, probe Probe, budget time.Duration) {
 	targets := healthTargets(rows, gg)
 	if len(targets) == 0 {
 		return
 	}
 
+	// The whole round is bounded, not just one probe. This runs inside the
+	// scan, which every write handler's republish and every kill's rescan is
+	// queued behind (contract §38), so a project that declares health paths on
+	// a dozen services — half of them accepting and never answering — must not
+	// be able to add waves of HealthTimeout to somebody's "Save" button.
+	var deadline time.Time
+	if budget > 0 {
+		deadline = time.Now().Add(budget)
+	}
+
 	results := make([]state.Health, len(targets))
+	probed := make([]bool, len(targets))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxHealthProbes)
 	for i := range targets {
@@ -39,8 +50,12 @@ func probeConfigured(rows []state.Port, gg []state.Group, probe Probe) {
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			timeout, ok := ports.ProbeBudget(HealthTimeout, deadline)
+			if !ok {
+				return
+			}
 			t := targets[i]
-			r := probe(t.host, t.port, t.path, HealthTimeout)
+			r := probe(t.host, t.port, t.path, timeout)
 			status, reason := state.NormalizeHealth(r.Status)
 			results[i] = state.Health{
 				Status:     status,
@@ -49,11 +64,17 @@ func probeConfigured(rows []state.Port, gg []state.Group, probe Probe) {
 				Reason:     reason,
 				Configured: true,
 			}
+			probed[i] = true
 		}(i)
 	}
 	wg.Wait()
 
 	for i, t := range targets {
+		if !probed[i] {
+			// Left for carryHealth: the previous tick's verdict beats a
+			// flicker to "unknown" for a probe that never ran.
+			continue
+		}
 		h := results[i]
 		for _, idx := range t.rows {
 			row := h

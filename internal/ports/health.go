@@ -76,11 +76,29 @@ func isConnectionRefused(err error) bool {
 	return false
 }
 
-// EnrichHealth probes every port concurrently (max 10 at a time) and
+// MaxProbes bounds how many health probes run at once. It is the same ceiling
+// the configured-health probe in the scanner uses.
+const MaxProbes = 10
+
+// EnrichHealth probes every port concurrently (max MaxProbes at a time) and
 // populates the Health* fields on each ListeningPort.
-func EnrichHealth(pp []ListeningPort, timeout time.Duration) {
+//
+// budget is the ceiling on the whole round, not on one probe: a machine with
+// forty listeners, ten of them sockets that accept and never answer, used to
+// cost four waves of `timeout` each — seconds of a scan that a `ports.kill`
+// or a `.sonar.yaml` write was queued behind. A probe that would start after
+// the budget is spent is skipped (its port keeps whatever health the previous
+// tick found, see carryHealth), and one that starts near the end has its own
+// timeout clamped to what is left, so the round costs at most budget.
+// A zero or negative budget means no ceiling.
+func EnrichHealth(pp []ListeningPort, timeout, budget time.Duration) {
+	var deadline time.Time
+	if budget > 0 {
+		deadline = time.Now().Add(budget)
+	}
+
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 10)
+	sem := make(chan struct{}, MaxProbes)
 
 	for i := range pp {
 		wg.Add(1)
@@ -88,11 +106,32 @@ func EnrichHealth(pp []ListeningPort, timeout time.Duration) {
 		go func(idx int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			result := ProbeHealth(pp[idx].BindAddress, pp[idx].Port, "/", timeout)
+			t, ok := ProbeBudget(timeout, deadline)
+			if !ok {
+				return
+			}
+			result := ProbeHealth(pp[idx].BindAddress, pp[idx].Port, "/", t)
 			pp[idx].HealthStatus = result.Status
 			pp[idx].HealthCode = result.StatusCode
 			pp[idx].HealthLatency = result.Latency
 		}(i)
 	}
 	wg.Wait()
+}
+
+// ProbeBudget is the timeout one probe may use before deadline, and whether it
+// is worth starting at all. A zero deadline means no budget: the probe gets its
+// full timeout.
+func ProbeBudget(timeout time.Duration, deadline time.Time) (time.Duration, bool) {
+	if deadline.IsZero() {
+		return timeout, true
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return 0, false
+	}
+	if left < timeout {
+		return left, true
+	}
+	return timeout, true
 }
