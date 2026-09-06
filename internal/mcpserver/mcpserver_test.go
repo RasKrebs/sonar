@@ -120,10 +120,8 @@ func TestToolsListAdvertisesTheReadTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		byName[tool.Name] = tool
 	}
-	if len(byName) != 2 {
-		t.Fatalf("tools/list returned %d tools, want 2: %v", len(byName), byName)
-	}
-
+	// The tool set is the sum of the tools_*.go files, so this asserts what the
+	// read tools promise rather than how many tools the server has in total.
 	for _, name := range []string{"list_ports", "inspect_port"} {
 		tool, ok := byName[name]
 		if !ok {

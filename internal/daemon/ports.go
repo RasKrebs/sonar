@@ -229,11 +229,15 @@ func handlePortsInspect(_ context.Context, req *Request) (any, error) {
 		return nil, err
 	}
 
+	// Health goes on the wire as ok | fail | unknown, with the probe's own
+	// verdict in reason (contract §22); the raw probe vocabulary is internal.
 	probe := req.Runtime.Scanner.Probe(row.BindAddress, row.Port, "/", scanner.HealthTimeout)
+	status, reason := state.NormalizeHealth(probe.Status)
 	row.Health = &state.Health{
-		Status:    probe.Status,
+		Status:    status,
 		Code:      probe.StatusCode,
 		LatencyMs: probe.Latency.Milliseconds(),
+		Reason:    reason,
 	}
 
 	sources := []string{}

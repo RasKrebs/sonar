@@ -258,6 +258,37 @@ func TestPortsInspectResolvesByBindAndPID(t *testing.T) {
 	}
 }
 
+// TestPortsInspectNormalisesHealth pins contract §22 on the inspect path: the
+// status is the published vocabulary and the probe's own word is the reason.
+// It used to publish the raw probe status, which no client's enum accepts.
+func TestPortsInspectNormalisesHealth(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newPortsHarness(t, ctx)
+
+	port := 9000
+	var res struct {
+		Port struct {
+			Health *state.Health `json:"health"`
+		} `json:"port"`
+	}
+	if e := c.call("ports.inspect", rpc.Selector{Port: &port}, &res); e != nil {
+		t.Fatalf("ports.inspect: %v", e)
+	}
+	if res.Port.Health == nil {
+		t.Fatal("ports.inspect returned no health")
+	}
+	switch res.Port.Health.Status {
+	case state.HealthOK, state.HealthFail, state.HealthUnknown:
+	default:
+		t.Errorf("health.status = %q, want ok, fail or unknown", res.Port.Health.Status)
+	}
+	// Nothing is listening on the fake row's port, so the probe is refused.
+	if res.Port.Health.Reason == "" {
+		t.Error("health.reason should carry the probe's verdict")
+	}
+}
+
 func TestPortsNextSkipsListeningPorts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

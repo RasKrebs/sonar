@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,8 +45,10 @@ func TestRealDaemonToolsList(t *testing.T) {
 		t.Logf("%-13s readOnly=%v openWorld=%v", tool.Name,
 			tool.Annotations.ReadOnlyHint, *tool.Annotations.OpenWorldHint)
 	}
-	if len(names) != 2 || names[0] != "inspect_port" && names[0] != "list_ports" {
-		t.Fatalf("tools/list = %v, want list_ports and inspect_port", names)
+	for _, want := range []string{"list_ports", "inspect_port"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("tools/list = %v, want it to include %s", names, want)
+		}
 	}
 }
 
