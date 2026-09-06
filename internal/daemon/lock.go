@@ -62,6 +62,12 @@ func AcquireLock(path string) (*Lock, error) {
 		}
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
+	// A daemon spawns children (`sonar start`, `sonar up`, autostart). None of
+	// them may inherit the lock handle: an inherited handle keeps the lock —
+	// and, on Windows, the file itself — alive after the daemon that took it
+	// has exited.
+	markNotInheritable(f)
+
 	if err := lockFile(f); err != nil {
 		pid := readLockPID(f)
 		f.Close()

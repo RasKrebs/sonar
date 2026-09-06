@@ -59,3 +59,13 @@ func isLockedOpenError(err error) bool {
 	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||
 		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
+
+// markNotInheritable clears the handle's inherit flag, so a child started by
+// the daemon cannot keep the lock (or the lock file) alive after the daemon
+// exits. Go already opens files with O_CLOEXEC on Windows; saying it again
+// here costs one syscall and makes the requirement explicit, because a
+// spawned child holding this handle is exactly how a daemon that has exited
+// goes on looking like it is running.
+func markNotInheritable(f *os.File) {
+	_ = windows.SetHandleInformation(windows.Handle(f.Fd()), windows.HANDLE_FLAG_INHERIT, 0)
+}

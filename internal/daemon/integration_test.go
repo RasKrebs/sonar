@@ -22,12 +22,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/raskrebs/sonar/internal/daemon"
 	"github.com/raskrebs/sonar/internal/daemon/client"
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
+	"github.com/raskrebs/sonar/internal/runs"
 	"github.com/raskrebs/sonar/internal/state"
 )
 
@@ -90,9 +92,51 @@ func newEnv(t *testing.T) *env {
 
 	socket := filepath.Join(sockDir, "d.sock")
 	if runtime.GOOS == "windows" {
-		socket = fmt.Sprintf(`\\.\pipe\sonar-itest-%d`, os.Getpid())
+		// Named pipes share one flat namespace, so the pipe is numbered as
+		// well as pid-stamped: two envs in one test binary must not land on
+		// the same address, or a daemon still shutting down from an earlier
+		// test owns the name this one is about to bind.
+		socket = fmt.Sprintf(`\\.\pipe\sonar-itest-%d-%d`, os.Getpid(), pipeSeq.Add(1))
 	}
 	return &env{t: t, bin: bin, home: home, socket: socket}
+}
+
+// pipeSeq numbers this test binary's named pipes.
+var pipeSeq atomic.Int64
+
+// lockPath is where this env's daemon takes its single-instance lock: beside
+// the socket, or in the config dir when the transport is a named pipe
+// (contract §15).
+func (e *env) lockPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(e.home, ".config", "sonar", "daemon.lock")
+	}
+	return filepath.Join(filepath.Dir(e.socket), "daemon.lock")
+}
+
+// stopDaemon stops a daemon this env started detached and waits until it is
+// really gone, not merely unreachable.
+//
+// Windows refuses to delete a file another process still has open, so a test
+// whose temp HOME holds the daemon's lock and log has to see that process exit
+// before t.TempDir's own cleanup runs — otherwise the test fails in teardown
+// with "the process cannot access the file because it is being used by another
+// process". pid may be 0 when the caller does not know it; the socket and the
+// lock are then the only evidence.
+func (e *env) stopDaemon(pid int) {
+	_ = e.command("daemon", "stop").Run()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if !daemon.SocketAlive(e.socket) && (pid <= 0 || !runs.PIDAlive(pid)) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The lock is the last thing a daemon lets go of.
+	if err := daemon.WaitForLockRelease(e.lockPath(), 10*time.Second); err != nil {
+		e.t.Logf("the daemon still holds %s: %v", e.lockPath(), err)
+	}
 }
 
 // command builds a `sonar` invocation pinned to this env.
@@ -399,10 +443,12 @@ func TestAutostart(t *testing.T) {
 	if c.Hello().PID <= 0 {
 		t.Errorf("autostarted daemon reported pid %d", c.Hello().PID)
 	}
-	t.Cleanup(func() {
-		var ok rpc.OKResult
-		_ = c.Call(context.Background(), "daemon.shutdown", rpc.Empty{}, &ok)
-	})
+	// The daemon autostart created is detached: nothing else in this test owns
+	// it. Cleanups run after the test's own defers, so this one cannot reuse c
+	// (already closed) — it stops the daemon through the CLI and waits for the
+	// process, so the temp HOME it holds the lock and log in can be removed.
+	daemonPID := c.Hello().PID
+	t.Cleanup(func() { e.stopDaemon(daemonPID) })
 
 	var snap state.Snapshot
 	if err := c.Call(ctx, "state.snapshot", rpc.StateSnapshotParams{}, &snap); err != nil {
@@ -434,7 +480,7 @@ func TestDaemonRestartIsRepeatable(t *testing.T) {
 	e.serve()
 	// After the first restart the daemon is detached, so the env's own cleanup
 	// (which kills the foreground child) no longer owns it.
-	t.Cleanup(func() { _ = e.command("daemon", "stop").Run() })
+	t.Cleanup(func() { e.stopDaemon(0) })
 
 	lastPID := ""
 	for i := 1; i <= 5; i++ {
@@ -465,7 +511,7 @@ func TestDaemonRestartIsRepeatable(t *testing.T) {
 		// replacement raced the old daemon's teardown the lock file was left
 		// holding a dead pid, or removed from under the live daemon.
 		if runtime.GOOS != "windows" {
-			lockPath := filepath.Join(filepath.Dir(e.socket), "daemon.lock")
+			lockPath := e.lockPath()
 			if holder := daemon.LockHolderPID(lockPath); fmt.Sprint(holder) != pid {
 				t.Errorf("after restart %d the lock at %s records pid %d, but the daemon reports pid %s",
 					i, lockPath, holder, pid)
