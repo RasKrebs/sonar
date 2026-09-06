@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,10 +36,27 @@ func VersionString() string {
 	return fmt.Sprintf("sonar %s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
 }
 
+// LatestTag is the tag of the newest published release, fetched under the
+// caller's context so a diagnosis with a deadline (`sonar doctor`) can give up
+// rather than hang on a network that is not there.
+func LatestTag(ctx context.Context) (string, error) {
+	release, err := fetchLatestRelease(ctx)
+	if err != nil {
+		return "", err
+	}
+	return release.TagName, nil
+}
+
 // FetchLatestRelease queries GitHub for the latest release.
-func FetchLatestRelease() (*githubRelease, error) {
+func FetchLatestRelease() (*githubRelease, error) { return fetchLatestRelease(context.Background()) }
+
+func fetchLatestRelease(ctx context.Context) (*githubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for updates: %w", err)
 	}

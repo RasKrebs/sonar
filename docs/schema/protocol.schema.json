@@ -390,6 +390,49 @@
         "remote_pid"
       ]
     },
+    "DaemonDoctorParams": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "only": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DaemonDoctorResult": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/definitions/DoctorCheck"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        },
+        "daemon_version": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "ok",
+        "checks",
+        "version",
+        "daemon_version"
+      ]
+    },
     "DaemonHelloParams": {
       "properties": {
         "client": {
@@ -562,6 +605,35 @@
         "compose_service",
         "compose_project",
         "container_port"
+      ]
+    },
+    "DoctorCheck": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "fix": {
+          "type": "string"
+        },
+        "fixable": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "summary",
+        "fixable"
       ]
     },
     "Empty": {
@@ -3789,6 +3861,14 @@
       },
       "result": {
         "$ref": "#/definitions/ConfigSetResult"
+      }
+    },
+    "daemon.doctor": {
+      "params": {
+        "$ref": "#/definitions/DaemonDoctorParams"
+      },
+      "result": {
+        "$ref": "#/definitions/DaemonDoctorResult"
       }
     },
     "daemon.hello": {
