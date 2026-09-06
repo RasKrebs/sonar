@@ -325,6 +325,8 @@ func init() {
 
 	// Remote hosts.
 	Describe("remote.scan", RemoteScanParams{}, RemoteScanResult{}, nil, nil)
+	Describe("remote.install", RemoteInstallParams{}, RemoteInstallResult{},
+		RemoteInstallChunk{}, RemoteInstallEnd{})
 
 	// Expose (spec 3).
 	Describe("expose.create", ExposeCreateParams{}, ExposeCreateResult{}, nil, nil)

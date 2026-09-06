@@ -2546,6 +2546,116 @@
         "requests"
       ]
     },
+    "RemoteInstallChunk": {
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "step"
+      ]
+    },
+    "RemoteInstallEnd": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "bin_path": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "daemon_running": {
+          "type": "boolean"
+        },
+        "daemon_pid": {
+          "type": "integer"
+        },
+        "linger_hint": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name",
+        "target",
+        "version",
+        "os",
+        "arch",
+        "bin_path",
+        "service",
+        "daemon_running"
+      ]
+    },
+    "RemoteInstallParams": {
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "ssh_args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "no_service": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "target"
+      ]
+    },
+    "RemoteInstallResult": {
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "affected": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subscription_id": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "ok",
+        "affected",
+        "subscription_id"
+      ]
+    },
     "RemoteScanParams": {
       "properties": {
         "host": {
@@ -3744,6 +3854,20 @@
       },
       "stream_end": {
         "$ref": "#/definitions/PortsWaitEnd"
+      }
+    },
+    "remote.install": {
+      "params": {
+        "$ref": "#/definitions/RemoteInstallParams"
+      },
+      "result": {
+        "$ref": "#/definitions/RemoteInstallResult"
+      },
+      "stream_chunk": {
+        "$ref": "#/definitions/RemoteInstallChunk"
+      },
+      "stream_end": {
+        "$ref": "#/definitions/RemoteInstallEnd"
       }
     },
     "remote.scan": {
