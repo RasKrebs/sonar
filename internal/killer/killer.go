@@ -140,7 +140,13 @@ func KillPorts(ctx context.Context, targets []Target, opts Options) []Result {
 	if snapshot == nil {
 		snapshot = scanPorts()
 	}
-	return newEngine().kill(ctx, snapshot, targets, opts)
+	rows := newEngine().kill(ctx, snapshot, targets, opts)
+	for i := range rows {
+		// The killer only ever acts on the machine it runs on. A row from a
+		// remote host is retagged by whatever forwarded the call.
+		rows[i].Host = state.LocalhostName
+	}
+	return rows
 }
 
 // scanPorts takes the enriched scan the killer needs to resolve targets: the

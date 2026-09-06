@@ -292,7 +292,10 @@ func (c *Conn) serve(ctx context.Context, msg rpc.Message) {
 	}
 
 	req := &Request{Method: msg.Method, ID: msg.ID, Params: msg.Params, Conn: c, Runtime: c.srv.runtime}
-	result, err := h(ctx, req)
+	// serveRequest is h plus the one thing that happens in front of every
+	// handler: a request naming a remote host goes over that host's bridge
+	// instead of to the handler (hostroute.go).
+	result, err := serveRequest(ctx, req, h)
 	switch {
 	case errors.Is(err, ErrResponseSent):
 		// The handler wrote its own reply.

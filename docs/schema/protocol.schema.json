@@ -963,6 +963,9 @@
     },
     "GroupsAssignParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -976,6 +979,9 @@
           "type": "string"
         },
         "proxy_id": {
+          "type": "string"
+        },
+        "key": {
           "type": "string"
         },
         "group": {
@@ -1029,6 +1035,9 @@
     },
     "GroupsConfigGetParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -1055,6 +1064,9 @@
     },
     "GroupsConfigSetParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "path": {
           "type": "string"
         },
@@ -1146,6 +1158,9 @@
     },
     "GroupsInspectParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         }
@@ -1229,6 +1244,9 @@
     },
     "GroupsKillParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -1335,6 +1353,9 @@
     },
     "GroupsStartParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },
@@ -1590,6 +1611,14 @@
         "last_seen"
       ]
     },
+    "HostParams": {
+      "properties": {
+        "host": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Include": {
       "items": {
         "type": "string"
@@ -1623,6 +1652,9 @@
     },
     "KillResult": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -1654,6 +1686,7 @@
       },
       "type": "object",
       "required": [
+        "host",
         "port",
         "bind_address",
         "pid",
@@ -2123,6 +2156,9 @@
     },
     "PortsHealthParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "ports": {
           "items": {
             "type": "integer"
@@ -2148,6 +2184,9 @@
     },
     "PortsHistoryParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -2201,6 +2240,9 @@
     },
     "PortsKillParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "targets": {
           "items": {
             "$ref": "#/definitions/Selector"
@@ -2230,6 +2272,9 @@
     },
     "PortsListParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "group": {
           "type": "string"
         },
@@ -2282,6 +2327,9 @@
     },
     "PortsLogsParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -2295,6 +2343,9 @@
           "type": "string"
         },
         "proxy_id": {
+          "type": "string"
+        },
+        "key": {
           "type": "string"
         },
         "lines": {
@@ -2364,6 +2415,9 @@
     },
     "PortsRenameParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -2377,6 +2431,9 @@
           "type": "string"
         },
         "proxy_id": {
+          "type": "string"
+        },
+        "key": {
           "type": "string"
         },
         "name": {
@@ -2466,6 +2523,9 @@
     },
     "PortsWaitParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "ports": {
           "items": {
             "type": "integer"
@@ -3017,6 +3077,9 @@
     },
     "Selector": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "port": {
           "type": "integer"
         },
@@ -3030,6 +3093,9 @@
           "type": "string"
         },
         "proxy_id": {
+          "type": "string"
+        },
+        "key": {
           "type": "string"
         }
       },
@@ -3293,6 +3359,9 @@
     },
     "SessionsInspectParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         }
@@ -3329,6 +3398,9 @@
     },
     "SessionsKillParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
@@ -3349,6 +3421,9 @@
     },
     "SessionsListParams": {
       "properties": {
+        "host": {
+          "type": "string"
+        },
         "active_only": {
           "type": "boolean"
         }
@@ -3654,7 +3729,7 @@
     },
     "claims.list": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/ClaimsListResult"
@@ -3670,7 +3745,7 @@
     },
     "config.get": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/ConfigGetResult"
@@ -3678,7 +3753,7 @@
     },
     "config.path": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/ConfigPathResult"
@@ -3718,7 +3793,7 @@
     },
     "daemon.status": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/DaemonStatusResult"
@@ -3828,7 +3903,7 @@
     },
     "groups.list": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/GroupsListResult"
@@ -3836,7 +3911,7 @@
     },
     "groups.reload": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/GroupsReloadResult"
@@ -3896,7 +3971,7 @@
     },
     "ports.graph": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/PortsGraphResult"
@@ -4042,7 +4117,7 @@
     },
     "runs.list": {
       "params": {
-        "$ref": "#/definitions/Empty"
+        "$ref": "#/definitions/HostParams"
       },
       "result": {
         "$ref": "#/definitions/RunsListResult"

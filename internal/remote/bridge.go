@@ -137,6 +137,20 @@ func (b *bridge) Config() Host {
 // verbatim. It fails fast while the bridge is down rather than queueing: a
 // caller wants to know that the host is unreachable, not to block on it.
 func (b *bridge) Call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+	cli, err := b.client()
+	if err != nil {
+		return nil, err
+	}
+	var out json.RawMessage
+	if err := cli.Call(ctx, method, params, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// client is the live connection, or the error a caller should see instead of
+// one: which state the host is in, and what it said last.
+func (b *bridge) client() (*client.Client, error) {
 	b.mu.RLock()
 	cli := b.cli
 	status, reason := b.status.Status, b.status.StatusReason
@@ -150,11 +164,7 @@ func (b *bridge) Call(ctx context.Context, method string, params json.RawMessage
 		return nil, rpc.NewError(rpc.CodeNotFound, detail,
 			"`sonar remote list` shows the connection; `sonar remote install "+b.cfg.Name+"` puts a daemon on it")
 	}
-	var out json.RawMessage
-	if err := cli.Call(ctx, method, params, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return cli, nil
 }
 
 // run is the connect / subscribe / reconnect loop. It never gives up: a host

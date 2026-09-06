@@ -91,17 +91,11 @@ func (s *Stream) Cancel(ctx context.Context) error {
 // arrive while the reply is still being decoded are buffered against the
 // subscription id, so nothing is lost in the gap.
 func (c *Client) Stream(ctx context.Context, method string, params, result any) (*Stream, error) {
-	var reply struct {
-		SubscriptionID string `json:"subscription_id"`
-	}
-	raw := json.RawMessage(nil)
-	if err := c.Call(ctx, method, params, &raw); err != nil {
+	raw, st, err := c.CallStream(ctx, method, params)
+	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, err
-	}
-	if reply.SubscriptionID == "" {
+	if st == nil {
 		return nil, errors.New("daemon: " + method + " did not return a subscription_id")
 	}
 	if result != nil {
@@ -109,11 +103,36 @@ func (c *Client) Stream(ctx context.Context, method string, params, result any) 
 			return nil, err
 		}
 	}
+	return st, nil
+}
+
+// CallStream calls a method without knowing whether it streams. It returns the
+// raw reply and, when that reply carried a subscription id, the stream its
+// chunks are arriving on; a plain method answers with a nil stream.
+//
+// It exists for the remote-host bridge, which forwards whatever method a client
+// asked for and has to relay the chunks if there are any. Registering the
+// stream here rather than after inspecting the reply is what keeps a chunk that
+// overtakes the caller from being lost: the id is claimed against whatever the
+// read loop has already buffered under it.
+func (c *Client) CallStream(ctx context.Context, method string, params any) (json.RawMessage, *Stream, error) {
+	raw := json.RawMessage(nil)
+	if err := c.Call(ctx, method, params, &raw); err != nil {
+		return nil, nil, err
+	}
+	var reply struct {
+		SubscriptionID string `json:"subscription_id"`
+	}
+	// A result that is not an object cannot be a stream reply, and that is not
+	// an error: plenty of methods answer with a bare value.
+	if err := json.Unmarshal(raw, &reply); err != nil || reply.SubscriptionID == "" {
+		return raw, nil, nil
+	}
 
 	st := c.streamFor(reply.SubscriptionID)
 	st.c, st.id = c, reply.SubscriptionID
 	c.claim(reply.SubscriptionID)
-	return st, nil
+	return raw, st, nil
 }
 
 // claim marks a stream as handed to its caller. A stream that has already

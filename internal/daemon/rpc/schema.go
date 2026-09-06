@@ -270,7 +270,7 @@ func init() {
 	// Daemon lifecycle.
 	Describe("daemon.hello", DaemonHelloParams{}, DaemonHelloResult{}, nil, nil)
 	Describe("daemon.shutdown", Empty{}, OKResult{}, nil, nil)
-	Describe("daemon.status", Empty{}, DaemonStatusResult{}, nil, nil)
+	Describe("daemon.status", HostParams{}, DaemonStatusResult{}, nil, nil)
 	Describe("daemon.schema", Empty{}, DaemonSchemaResult{}, nil, nil)
 
 	// State.
@@ -288,16 +288,16 @@ func init() {
 	Describe("ports.wait", PortsWaitParams{}, StreamStart{}, PortsWaitChunk{}, PortsWaitEnd{})
 	Describe("ports.health", PortsHealthParams{}, PortsHealthResult{}, nil, nil)
 	Describe("ports.logs", PortsLogsParams{}, PortsLogsResult{}, PortsLogsChunk{}, StreamEnd{})
-	Describe("ports.graph", Empty{}, PortsGraphResult{}, nil, nil)
+	Describe("ports.graph", HostParams{}, PortsGraphResult{}, nil, nil)
 	Describe("ports.history", PortsHistoryParams{}, PortsHistoryResult{}, nil, nil)
 
 	// Groups.
-	Describe("groups.list", Empty{}, GroupsListResult{}, nil, nil)
+	Describe("groups.list", HostParams{}, GroupsListResult{}, nil, nil)
 	Describe("groups.inspect", GroupsInspectParams{}, GroupsInspectResult{}, nil, nil)
 	Describe("groups.kill", GroupsKillParams{}, KillEnvelope{}, nil, nil)
 	Describe("groups.start", GroupsStartParams{}, GroupsStartResult{}, GroupsStartChunk{}, GroupsStartEnd{})
 	Describe("groups.assign", GroupsAssignParams{}, GroupsAssignResult{}, nil, nil)
-	Describe("groups.reload", Empty{}, GroupsReloadResult{}, nil, nil)
+	Describe("groups.reload", HostParams{}, GroupsReloadResult{}, nil, nil)
 	Describe("groups.config.get", GroupsConfigGetParams{}, GroupsConfigGetResult{}, nil, nil)
 	Describe("groups.config.set", GroupsConfigSetParams{}, GroupsConfigSetResult{}, nil, nil)
 	Describe("groups.init", GroupsInitParams{}, GroupsInitResult{}, nil, nil)
@@ -305,13 +305,13 @@ func init() {
 	// Runs.
 	Describe("runs.register", RunsRegisterParams{}, RunsRegisterResult{}, nil, nil)
 	Describe("runs.unregister", RunsUnregisterParams{}, OKResult{}, nil, nil)
-	Describe("runs.list", Empty{}, RunsListResult{}, nil, nil)
+	Describe("runs.list", HostParams{}, RunsListResult{}, nil, nil)
 	Describe("runs.spawn", RunsSpawnParams{}, RunsSpawnResult{}, nil, nil)
 
 	// Claims (spec 2, slice M5).
 	Describe("claims.acquire", ClaimsAcquireParams{}, ClaimsAcquireResult{}, nil, nil)
 	Describe("claims.release", ClaimsReleaseParams{}, ClaimsReleaseResult{}, nil, nil)
-	Describe("claims.list", Empty{}, ClaimsListResult{}, nil, nil)
+	Describe("claims.list", HostParams{}, ClaimsListResult{}, nil, nil)
 
 	// Sessions (spec 2, slice M4).
 	Describe("sessions.list", SessionsListParams{}, SessionsListResult{}, nil, nil)
@@ -319,9 +319,9 @@ func init() {
 	Describe("sessions.kill", SessionsKillParams{}, KillEnvelope{}, nil, nil)
 
 	// Config.
-	Describe("config.get", Empty{}, ConfigGetResult{}, nil, nil)
+	Describe("config.get", HostParams{}, ConfigGetResult{}, nil, nil)
 	Describe("config.set", ConfigSetParams{}, ConfigSetResult{}, nil, nil)
-	Describe("config.path", Empty{}, ConfigPathResult{}, nil, nil)
+	Describe("config.path", HostParams{}, ConfigPathResult{}, nil, nil)
 
 	// Remote hosts.
 	Describe("remote.scan", RemoteScanParams{}, RemoteScanResult{}, nil, nil)

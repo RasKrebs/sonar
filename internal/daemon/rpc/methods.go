@@ -17,14 +17,37 @@ import (
 
 // ---------------------------------------------------------------- shared ---
 
-// Selector addresses one port (contract §3). Exactly one of Port, PID, RunID
-// and ProxyID is set; BindAddress only disambiguates Port.
+// HostParams is the optional `host` a method takes to act on a registered
+// remote host instead of this machine (remote-hosts spec, "Actions on a remote
+// host"). Absent means localhost, which is what every client written before
+// remote hosts existed sends, so their calls keep meaning what they meant
+// (contract §39).
+//
+// The daemon accepts it on every method it serves except `state.*`, `stream.*`,
+// `daemon.hello`, `daemon.shutdown` and the `remote.*` family. It is embedded
+// in the params types below where it is worth spelling out in the schema.
+type HostParams struct {
+	// Host names a registered remote host. Empty or "localhost" is this
+	// machine.
+	Host string `json:"host,omitempty"`
+}
+
+// Selector addresses one port (contract §3). Exactly one of Port, PID, RunID,
+// ProxyID and Key is set; BindAddress only disambiguates Port.
 type Selector struct {
+	HostParams
 	Port        *int    `json:"port,omitempty"`
 	PID         *int    `json:"pid,omitempty"`
 	BindAddress *string `json:"bind_address,omitempty"`
 	RunID       *string `json:"run_id,omitempty"`
 	ProxyID     *string `json:"proxy_id,omitempty"`
+	// Key is a delta key handed straight back as a selector: `"<port>"`,
+	// `"<port>:<bind_address>"`, or either of those behind a `"<host>/"`
+	// prefix naming a registered host. A client that holds the key the stream
+	// gave it does not have to take it apart to act on the row. The daemon
+	// expands it into Host, Port and BindAddress before any handler sees it,
+	// so it never combines with them.
+	Key string `json:"key,omitempty"`
 }
 
 // MutationResult is the minimum every mutating method returns (contract §3).
@@ -112,6 +135,7 @@ type StateSubscribeParams struct {
 // ----------------------------------------------------------------- ports ---
 
 type PortsListParams struct {
+	HostParams
 	Group     *string `json:"group,omitempty"`
 	Filter    *string `json:"filter,omitempty"` // docker | user | system
 	All       bool    `json:"all,omitempty"`
@@ -140,6 +164,7 @@ type Connection struct {
 }
 
 type PortsKillParams struct {
+	HostParams
 	Targets  []Selector `json:"targets"`
 	Tree     bool       `json:"tree,omitempty"`
 	Force    bool       `json:"force,omitempty"`
@@ -171,6 +196,7 @@ type PortsNextResult struct {
 }
 
 type PortsWaitParams struct {
+	HostParams
 	Ports      []int   `json:"ports,omitempty"`
 	RunID      *string `json:"run_id,omitempty"`
 	Any        bool    `json:"any,omitempty"`
@@ -190,6 +216,7 @@ type PortsWaitEnd struct {
 }
 
 type PortsHealthParams struct {
+	HostParams
 	Ports []int `json:"ports,omitempty"`
 }
 
@@ -241,6 +268,7 @@ type GraphEdge struct {
 }
 
 type PortsHistoryParams struct {
+	HostParams
 	Port  *int    `json:"port,omitempty"`
 	Since *string `json:"since,omitempty"`
 	Limit int     `json:"limit,omitempty"`
@@ -266,6 +294,7 @@ type GroupsListResult struct {
 }
 
 type GroupsInspectParams struct {
+	HostParams
 	Name string `json:"name"`
 }
 
@@ -275,6 +304,7 @@ type GroupsInspectResult struct {
 }
 
 type GroupsKillParams struct {
+	HostParams
 	Name    string `json:"name"`
 	Force   bool   `json:"force,omitempty"`
 	GraceMs int    `json:"grace_ms,omitempty"`
@@ -282,6 +312,7 @@ type GroupsKillParams struct {
 }
 
 type GroupsStartParams struct {
+	HostParams
 	Name             *string  `json:"name,omitempty"`
 	ConfigPath       *string  `json:"config_path,omitempty"`
 	Only             []string `json:"only,omitempty"`
@@ -332,6 +363,7 @@ type GroupConfig struct {
 }
 
 type GroupsConfigGetParams struct {
+	HostParams
 	Name *string `json:"name,omitempty"`
 	Path *string `json:"path,omitempty"`
 }
@@ -342,6 +374,7 @@ type GroupsConfigGetResult struct {
 }
 
 type GroupsConfigSetParams struct {
+	HostParams
 	Path     string               `json:"path"`
 	Services []groups.ServiceEdit `json:"services"`
 }
@@ -492,6 +525,7 @@ type ClaimsListResult struct {
 // -------------------------------------------------------------- sessions ---
 
 type SessionsListParams struct {
+	HostParams
 	ActiveOnly bool `json:"active_only,omitempty"`
 }
 
@@ -500,6 +534,7 @@ type SessionsListResult struct {
 }
 
 type SessionsInspectParams struct {
+	HostParams
 	ID string `json:"id"`
 }
 
@@ -510,6 +545,7 @@ type SessionsInspectResult struct {
 }
 
 type SessionsKillParams struct {
+	HostParams
 	ID     string `json:"id"`
 	Tree   bool   `json:"tree,omitempty"`
 	Force  bool   `json:"force,omitempty"`
