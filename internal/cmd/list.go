@@ -51,7 +51,12 @@ func init() {
 	listCmd.Flags().BoolVar(&allColumnsFlag, "all-columns", false, "Display all available columns")
 	listCmd.Flags().BoolVar(&healthFlag, "health", false, "Run HTTP health checks on each port")
 	listCmd.Flags().BoolVar(&statsFlag, "stats", false, "Include resource stats (CPU, memory, threads, uptime, state)")
-	listCmd.Flags().StringVar(&hostFlag, "host", "", "Scan a remote host via SSH (e.g. user@hostname)")
+	listCmd.Flags().StringVar(&hostFlag, "host", "",
+		"Read a registered `host` through the daemon, or scan any user@hostname over SSH")
+	_ = listCmd.RegisterFlagCompletionFunc("host",
+		func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return remoteHostNames(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+		})
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
 	listCmd.Flags().StringVar(&groupFlag, "group", "", "Show only ports in this `group`")
@@ -260,8 +265,27 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 		return nil, nil, errors.New("--session and --host cannot be combined: a session is local daemon state")
 	}
 	if hostFlag != "" {
-		// A remote host is scanned over SSH; the local daemon knows nothing
-		// about it.
+		// A registered host has a daemon and a bridge, so its ports come back
+		// through the local daemon already attributed, named and grouped. The
+		// SSH scan below is the fallback for a host that has neither.
+		if c := routeRemote(ctx, hostFlag); c != nil {
+			defer c.Close()
+			var res rpc.PortsListResult
+			err := remoteCall(ctx, c, hostFlag, "ports.list", rpc.PortsListParams{
+				Group:     strPtrOrNil(q.group),
+				Filter:    strPtrOrNil(q.filter),
+				All:       q.showApps,
+				IPVersion: strPtrOrNil(q.ipVersion),
+				Include:   listInclude(statsFlag, healthFlag),
+			}, &res)
+			if err != nil {
+				return nil, nil, err
+			}
+			return state.ToListeningAll(res.Ports), nil, nil
+		}
+
+		// A remote host with no daemon is scanned over SSH; the local daemon
+		// knows nothing about it.
 		results, err := ports.ScanRemote(hostFlag)
 		if err != nil {
 			return nil, nil, err
