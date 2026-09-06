@@ -17,6 +17,9 @@ type Config struct {
 	Daemon   DaemonConfig   `yaml:"daemon"`
 	Color    *bool          `yaml:"color"`    // pointer: nil = unset, distinguishes from explicit false
 	Services map[int]string `yaml:"services"` // port -> label, merged over built-in table
+	// Remote holds the registered SSH hosts the daemon bridges to (see
+	// remote.go).
+	Remote RemoteConfig `yaml:"remote"`
 }
 
 // DefaultIdleTimeout is how long `sonar serve` stays up with no clients, no
@@ -88,7 +91,10 @@ func Load() (*Config, []string) {
 		return &Config{}, []string{fmt.Sprintf("ignoring %s: %v", Path(), err)}
 	}
 
-	return cfg, validate(cfg)
+	warnings := validate(cfg)
+	hosts, hostWarnings := validateHosts(cfg.Remote.Hosts)
+	cfg.Remote.Hosts = hosts
+	return cfg, append(warnings, hostWarnings...)
 }
 
 const template = `# sonar configuration
@@ -117,6 +123,14 @@ const template = `# sonar configuration
 # services:         # label custom/unknown ports (port: name)
 #   9000: php-fpm
 #   5050: my-dashboard
+
+# remote:           # hosts reached over SSH; written by 'sonar remote add'
+#   hosts:
+#     - name: hetzner            # [a-z0-9-]+, how you address it everywhere
+#       target: deploy@203.0.113.7   # what ssh receives, verbatim
+#       ssh_args: ["-J", "bastion"]
+#       identity: ~/.ssh/id_ed25519
+#       remote_bin: ~/.local/bin/sonar
 
 # Environment overrides (no config key; set them in your shell):
 #   SONAR_DB       path to the database of names, pins and history
