@@ -33,6 +33,10 @@ var AllKillMethods = []KillMethod{
 // emits one row per signalled process, children before parents, every row
 // carrying the port of the listener whose tree it belongs to.
 type KillResult struct {
+	// Host is the machine the row happened on: "localhost" for this one, the
+	// registered name for a kill that was forwarded to a remote host (contract
+	// §39: every row carries a host, and local rows say so).
+	Host        string     `json:"host"`
 	Port        int        `json:"port"`
 	BindAddress string     `json:"bind_address"`
 	PID         int        `json:"pid"`

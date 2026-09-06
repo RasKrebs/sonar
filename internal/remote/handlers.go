@@ -49,6 +49,7 @@ func init() {
 
 	daemon.OnStart(start)
 	daemon.OnShutdown(func(bool) {
+		daemon.SetRouter(nil)
 		if m := Current(); m != nil {
 			m.Stop()
 			setManager(nil)
@@ -72,6 +73,7 @@ func start(rt *daemon.Runtime) {
 		OnEvent:  rt.Server().BroadcastEvent,
 	})
 	setManager(m)
+	daemon.SetRouter(m)
 	rt.Scanner.SetRemote(m.Rows)
 	m.Start(context.Background(), hosts)
 	if len(hosts) > 0 {
@@ -157,6 +159,12 @@ func handleRemove(_ context.Context, req *daemon.Request) (any, error) {
 // same rules as the local one, so there is no read-only mode (remote-hosts
 // spec, decision 3).
 //
+// It is the generic form of the `host` field every method now takes, and takes
+// exactly the same path (contract §43): a streaming method streams, and the
+// rows that come back say which host they are from rather than calling
+// themselves "localhost". The params are still passed through untouched — a
+// caller that spells the method out is spelling its params out too.
+//
 // `remote.call` is deliberately not a recursion guard's business: the far side
 // subscribes to nothing but its own machine, so forwarding `remote.call` to a
 // host that has hosts of its own reaches exactly one level, which is what a
@@ -180,18 +188,25 @@ func handleCall(ctx context.Context, req *daemon.Request) (any, error) {
 			"call "+p.Method+" directly instead")
 	}
 
+	if !m.Has(p.Host) {
+		return nil, unknownHostError(m, p.Host)
+	}
+
 	params := p.Params
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
 	}
-	out, err := m.Call(ctx, p.Host, p.Method, params)
+	// The typed path and the generic one are the same path: `remote.call
+	// {host, method}` and `<method> {host}` both end in daemon.ForwardTo, so a
+	// streaming method streams either way and a result is retagged either way.
+	out, err := daemon.ForwardTo(ctx, req, p.Host, p.Method, params)
 	if err != nil {
 		if errors.Is(err, ErrUnknownHost) {
 			return nil, unknownHostError(m, p.Host)
 		}
 		return nil, err
 	}
-	return rpc.RemoteCallResult(out), nil
+	return out, nil
 }
 
 // TargetOf is the SSH destination a remote.add call names. Some clients spell

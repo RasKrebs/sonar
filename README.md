@@ -468,6 +468,7 @@ sonar remote list                              # status, latency, version, load
 sonar remote remove hetzner
 
 sonar list --host hetzner                      # that host's ports
+sonar list --host "*"                          # every host, with a HOST column
 sonar info 3000 --host hetzner
 ```
 
@@ -492,6 +493,43 @@ thirty for as long as it stays registered.
 `--host` also still takes a bare `user@host` that sonar knows nothing about: it
 falls back to the agentless `ssh` + `ss`/`lsof` scan and prints a hint to
 `sonar remote install`.
+
+#### Acting on another machine
+
+Every write takes `--host` too, and does there exactly what it does here:
+
+```sh
+sonar kill 3000 --host hetzner                 # stop a port on that machine
+sonar kill -g api --host hetzner               # a whole group of its services
+sonar kill-all --filter docker --host hetzner  # its containers
+sonar up api --host hetzner                    # start a group from its .sonar.yaml
+sonar logs 3000 --host hetzner                 # tail its output here
+sonar rename 3000 storefront --host hetzner    # its name, in its database
+sonar assign 3000 storefront --host hetzner
+```
+
+The local daemon forwards the call over that host's bridge and hands back what
+the remote daemon answered, in the same envelope a local call returns — every
+result row says which host it happened on, and a kill's `affected` carries the
+`<host>/<port>:<bind>` keys the stream uses for those rows. A streaming command
+streams: `sonar up --host` prints each service as the far side starts it, and
+Ctrl-C stops the remote work rather than just this terminal.
+
+Because a row's key already names its host, a client can hand one straight back
+as a selector — `{"key": "hetzner/3000:127.0.0.1"}` is the whole of a selector,
+host included. One call acts on one machine; naming two is an error rather than
+half a kill on each.
+
+Two things stay local. `sonar attach` puts *this* terminal in front of a
+process, so it refuses `--host` and says to ssh over and attach there. And an
+agent session is state this daemon holds, so `sonar kill --session` has no
+remote form. Everything else needs the daemon running here — it is where the
+connection to the other machine lives — and says so instead of quietly scanning
+this machine instead.
+
+`sonar up --host` needs the group named: the `.sonar.yaml` at your working
+directory is a path on this machine, and it is the remote daemon that reads the
+file and starts the services.
 
 ### The daemon
 

@@ -8,9 +8,10 @@ import "github.com/raskrebs/sonar/internal/ports"
 // byte-identical rows.
 func FromListening(lp ports.ListeningPort) Port {
 	p := Port{
-		// A row built straight from a scan is this machine's own. The daemon
-		// re-tags rows it multiplexes in from a remote bridge.
-		Host:        LocalhostName,
+		// A row built straight from a scan is this machine's own; a row that
+		// came back from the daemon already knows which host it is from. The
+		// daemon re-tags rows it multiplexes in from a remote bridge.
+		Host:        HostOf(lp.Host),
 		Port:        lp.Port,
 		BindAddress: lp.BindAddress,
 		IPVersion:   lp.IPVersion,

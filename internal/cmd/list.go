@@ -52,10 +52,12 @@ func init() {
 	listCmd.Flags().BoolVar(&healthFlag, "health", false, "Run HTTP health checks on each port")
 	listCmd.Flags().BoolVar(&statsFlag, "stats", false, "Include resource stats (CPU, memory, threads, uptime, state)")
 	listCmd.Flags().StringVar(&hostFlag, "host", "",
-		"Read a registered `host` through the daemon, or scan any user@hostname over SSH")
+		"Read a registered `host` through the daemon, \"*\" for every host, or scan any user@hostname over SSH")
 	_ = listCmd.RegisterFlagCompletionFunc("host",
 		func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-			return remoteHostNames(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+			// Only `list` reads every host at once, so only `list` offers it.
+			return append([]string{allHosts}, remoteHostNames(cmd.Context())...),
+				cobra.ShellCompDirectiveNoFileComp
 		})
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
@@ -264,24 +266,34 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 	if hostFlag != "" && q.session != "" {
 		return nil, nil, errors.New("--session and --host cannot be combined: a session is local daemon state")
 	}
+	if hostFlag == allHosts {
+		rows, err := listEveryHost(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return applyListFilters(rows, q), nil, nil
+	}
 	if hostFlag != "" {
 		// A registered host has a daemon and a bridge, so its ports come back
 		// through the local daemon already attributed, named and grouped. The
 		// SSH scan below is the fallback for a host that has neither.
 		if c := routeRemote(ctx, hostFlag); c != nil {
 			defer c.Close()
-			var res rpc.PortsListResult
-			err := remoteCall(ctx, c, hostFlag, "ports.list", rpc.PortsListParams{
-				Group:     strPtrOrNil(q.group),
-				Filter:    strPtrOrNil(q.filter),
-				All:       q.showApps,
-				IPVersion: strPtrOrNil(q.ipVersion),
-				Include:   listInclude(statsFlag, healthFlag),
-			}, &res)
+			// `host` on the method itself: the local daemon forwards the read
+			// over that host's bridge and hands the rows back tagged with it
+			// (contract §43).
+			rows, err := daemonList(ctx, c, rpc.PortsListParams{
+				HostParams: rpc.HostParams{Host: hostFlag},
+				Group:      strPtrOrNil(q.group),
+				Filter:     strPtrOrNil(q.filter),
+				All:        q.showApps,
+				IPVersion:  strPtrOrNil(q.ipVersion),
+				Include:    listInclude(statsFlag, healthFlag),
+			})
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, cliError(err)
 			}
-			return state.ToListeningAll(res.Ports), nil, nil
+			return rows, nil, nil
 		}
 
 		// A remote host with no daemon is scanned over SSH; the local daemon
@@ -337,6 +349,35 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 	// This is the no-daemon path, so it happens per command.
 	_, index := groups.Attribute(results)
 	return applyListFilters(results, q), index, nil
+}
+
+// allHosts is what `--host "*"` spells: every machine sonar knows about, this
+// one included.
+const allHosts = "*"
+
+// listEveryHost reads the whole multiplexed table. It goes through
+// `state.snapshot {hosts: ["*"]}` rather than a read per host because that is
+// the one call that already means "every machine": the daemon has the rows
+// from every bridge in hand, tagged and keyed, and does not have to go back
+// over the network for them.
+func listEveryHost(ctx context.Context) ([]ports.ListeningPort, error) {
+	if noDaemonFlag {
+		return nil, errors.New(`--host "*" needs the daemon: the other hosts are connected from there`)
+	}
+	c, err := dialDaemon(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(`--host "*" needs the daemon: %w`, err)
+	}
+	defer c.Close()
+
+	var snap state.Snapshot
+	if err := c.Call(ctx, "state.snapshot", rpc.StateSnapshotParams{
+		Hosts:   []string{allHosts},
+		Include: listInclude(statsFlag, healthFlag),
+	}, &snap); err != nil {
+		return nil, cliError(err)
+	}
+	return state.ToListeningAll(snap.Ports), nil
 }
 
 // applyListFilters is the direct path's copy of what the daemon does to

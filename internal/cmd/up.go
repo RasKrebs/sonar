@@ -44,6 +44,7 @@ var upCmd = &cobra.Command{
 func init() {
 	upCmd.Flags().StringSliceVar(&upOnly, "only", nil, "Start only these services (comma separated)")
 	upCmd.Flags().BoolVar(&upJSON, "json", false, "Output as JSON")
+	addHostFlag(upCmd, "Start the group on a registered remote `host` instead of this machine")
 	rootCmd.AddCommand(upCmd)
 }
 
@@ -53,7 +54,7 @@ func upRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	c, err := connectForWrite(cmd.Context())
+	c, err := connectForHostWrite(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -72,11 +73,18 @@ func upRun(cmd *cobra.Command, args []string) error {
 // upParams turns the command line into groups.start params: a name when one was
 // given, the config at or above the working directory otherwise.
 func upParams(args []string) (rpc.GroupsStartParams, error) {
-	params := rpc.GroupsStartParams{Only: upOnly}
+	params := rpc.GroupsStartParams{HostParams: hostParams(), Only: upOnly}
 	if len(args) == 1 {
 		name := strings.TrimSpace(args[0])
 		params.Name = &name
 		return params, nil
+	}
+	if onRemoteHost() {
+		// The config path below is a path on this machine, and the remote
+		// daemon resolves groups against its own .sonar.yaml files. Naming the
+		// group is the only thing that can mean the same on both sides.
+		return params, fmt.Errorf("name the group to start on %s: `sonar up <group> --host %s`",
+			remoteHostFlag, remoteHostFlag)
 	}
 
 	wd, err := os.Getwd()

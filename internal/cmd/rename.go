@@ -42,6 +42,7 @@ func init() {
 	renameCmd.Flags().BoolVar(&renamePID, "pid", false, "Read the argument as a pid instead of a port")
 	renameCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
 	renameCmd.Flags().BoolVar(&renameJSON, "json", false, "Output as JSON")
+	addHostFlag(renameCmd, "Rename a port on a registered remote `host` instead of this machine")
 	rootCmd.AddCommand(renameCmd)
 }
 
@@ -55,7 +56,7 @@ func renameRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	c, err := connectForWrite(cmd.Context())
+	c, err := connectForHostWrite(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -84,9 +85,9 @@ func selectorFrom(arg string, asPID bool, cmd *cobra.Command) (rpc.Selector, err
 		return rpc.Selector{}, fmt.Errorf("%q is not a port or a pid", arg)
 	}
 	if asPID {
-		return rpc.Selector{PID: &n}, nil
+		return rpc.Selector{HostParams: hostParams(), PID: &n}, nil
 	}
-	sel := rpc.Selector{Port: &n}
+	sel := rpc.Selector{HostParams: hostParams(), Port: &n}
 	if cmd != nil {
 		if ip, _ := cmd.Flags().GetString("ip"); ip != "" {
 			sel.BindAddress = &ip
@@ -115,7 +116,10 @@ func writeValue(args []string, clear bool, what, example string) (*string, error
 
 // connectForWrite dials the daemon, starting it if it is not running. A daemon
 // that will not start is fatal here: there is nowhere else to write to.
-func connectForWrite(ctx context.Context) (*client.Client, error) {
+//
+// It is a variable for the same reason dialDaemon is: the tests point the CLI
+// at a daemon of their own rather than at the user's.
+var connectForWrite = func(ctx context.Context) (*client.Client, error) {
 	c, err := client.Connect(ctx, client.ClientInfo{Name: "cli", Version: selfupdate.Version})
 	if err != nil {
 		return nil, fmt.Errorf("%w\nhint: the daemon log is at %s", err, daemon.LogPath())

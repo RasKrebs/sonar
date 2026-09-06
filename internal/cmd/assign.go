@@ -30,6 +30,7 @@ func init() {
 	assignCmd.Flags().BoolVar(&assignPID, "pid", false, "Read the argument as a pid instead of a port")
 	assignCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
 	assignCmd.Flags().BoolVar(&assignJSON, "json", false, "Output as JSON")
+	addHostFlag(assignCmd, "Pin a port on a registered remote `host` instead of this machine")
 	rootCmd.AddCommand(assignCmd)
 }
 
@@ -43,7 +44,7 @@ func assignRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	c, err := connectForWrite(cmd.Context())
+	c, err := connectForHostWrite(cmd.Context())
 	if err != nil {
 		return err
 	}

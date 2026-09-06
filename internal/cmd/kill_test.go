@@ -16,11 +16,12 @@ import (
 )
 
 func sampleResults() []killer.Result {
+	const here = state.LocalhostName
 	return []killer.Result{
-		{Port: 3000, BindAddress: "127.0.0.1", PID: 400, Name: "esbuild", Method: state.MethodSIGTERM, OK: true},
-		{Port: 3000, BindAddress: "127.0.0.1", PID: 300, Name: "vite", Method: state.MethodSIGKILL, OK: true},
-		{Port: 5432, BindAddress: "0.0.0.0", PID: 0, Name: "db", Method: state.MethodDockerStop, OK: true},
-		{Port: 8080, BindAddress: "127.0.0.1", PID: 900, Name: "nginx", Method: state.MethodNone, OK: false,
+		{Host: here, Port: 3000, BindAddress: "127.0.0.1", PID: 400, Name: "esbuild", Method: state.MethodSIGTERM, OK: true},
+		{Host: here, Port: 3000, BindAddress: "127.0.0.1", PID: 300, Name: "vite", Method: state.MethodSIGKILL, OK: true},
+		{Host: here, Port: 5432, BindAddress: "0.0.0.0", PID: 0, Name: "db", Method: state.MethodDockerStop, OK: true},
+		{Host: here, Port: 8080, BindAddress: "127.0.0.1", PID: 900, Name: "nginx", Method: state.MethodNone, OK: false,
 			Error: "not permitted to signal PID 900"},
 	}
 }
@@ -34,6 +35,7 @@ func TestKillJSONGolden(t *testing.T) {
 	}
 	const want = `[
   {
+    "host": "localhost",
     "port": 3000,
     "bind_address": "127.0.0.1",
     "pid": 400,
@@ -42,6 +44,7 @@ func TestKillJSONGolden(t *testing.T) {
     "ok": true
   },
   {
+    "host": "localhost",
     "port": 3000,
     "bind_address": "127.0.0.1",
     "pid": 300,
@@ -50,6 +53,7 @@ func TestKillJSONGolden(t *testing.T) {
     "ok": true
   },
   {
+    "host": "localhost",
     "port": 5432,
     "bind_address": "0.0.0.0",
     "pid": 0,
@@ -58,6 +62,7 @@ func TestKillJSONGolden(t *testing.T) {
     "ok": true
   },
   {
+    "host": "localhost",
     "port": 8080,
     "bind_address": "127.0.0.1",
     "pid": 900,

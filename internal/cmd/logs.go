@@ -34,6 +34,18 @@ var logsCmd = &cobra.Command{
 
 		bindIP, _ := cmd.Flags().GetString("ip")
 
+		if onRemoteHost() {
+			// Another machine's output only reaches this terminal through the
+			// daemon that holds the bridge; there is no direct path to fall
+			// back to.
+			c, err := connectForHostWrite(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			return logsThroughDaemon(cmd.Context(), c, port, bindIP)
+		}
+
 		if c := daemonClient(cmd.Context()); c != nil {
 			defer c.Close()
 			return logsThroughDaemon(cmd.Context(), c, port, bindIP)
@@ -97,9 +109,13 @@ func logsThroughDaemon(ctx context.Context, c *client.Client, port int, bindIP s
 		display.Cyan(fmt.Sprintf("%d", row.PID)))
 
 	params := rpc.PortsLogsParams{
-		Selector: rpc.Selector{Port: &row.Port, BindAddress: strPtrOrNil(row.BindAddress)},
-		Lines:    logsLinesFlag,
-		Follow:   logsFollow,
+		Selector: rpc.Selector{
+			HostParams:  hostParams(),
+			Port:        &row.Port,
+			BindAddress: strPtrOrNil(row.BindAddress),
+		},
+		Lines:  logsLinesFlag,
+		Follow: logsFollow,
 	}
 
 	if !logsFollow {
@@ -156,7 +172,7 @@ func printLogHeader(source string) {
 // daemonFindPort resolves one port through ports.list, so the header a command
 // prints names the same process the daemon is about to act on.
 func daemonFindPort(ctx context.Context, c *client.Client, port int, bindIP string) (*ports.ListeningPort, error) {
-	rows, err := daemonList(ctx, c, rpc.PortsListParams{All: true})
+	rows, err := hostSnapshot(ctx, c)
 	if err != nil {
 		return nil, cliError(err)
 	}
@@ -190,5 +206,6 @@ func init() {
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", true, "Follow log output (stream continuously)")
 	logsCmd.Flags().IntVarP(&logsLinesFlag, "lines", "n", 10, "Number of trailing lines to show before following")
 	logsCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
+	addHostFlag(logsCmd, "Tail a port's output on a registered remote `host` instead of this machine")
 	rootCmd.AddCommand(logsCmd)
 }
