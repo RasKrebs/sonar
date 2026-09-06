@@ -17,9 +17,36 @@ import (
 	"github.com/raskrebs/sonar/internal/state"
 )
 
+// pipeWrite and pipeRead bound how long a test will wait on the in-memory
+// connection. They are hang-guards, not latency assertions: a handler that
+// never answers has to fail the test rather than hang it until `go test
+// -timeout` shoots the whole binary, but a handler that answers in 20 ms on a
+// laptop and 4 s on a contended two-core CI runner is not a bug, and a deadline
+// that calls it one produces exactly the flake this suite kept seeing — three
+// different tests, on three different branches, all failing as "read pipe: i/o
+// timeout" at the old 3 s.
+//
+// net.Pipe is synchronous and unbuffered, so the server's write blocks until
+// the test reads; the write deadline needs the same headroom as the read.
+const (
+	pipeWrite = 30 * time.Second
+	pipeRead  = 30 * time.Second
+	// settle is how long a test may wait for work the daemon does on its own
+	// clock — a scan tick, a delta, a stream ending. The scan loop's base
+	// interval is 2 s, so anything under a few of those is a race with the
+	// runner rather than a bound on the daemon.
+	settle = 30 * time.Second
+)
+
 // testHarness is a Server wired to an in-memory connection, so the dispatcher,
 // the codec, the subscription registry and the fan-out are exercised together
 // without touching the filesystem or the OS scanner.
+//
+// "Without touching the OS" is load-bearing and is enforced by the seams below:
+// Scan, Graph and Probe are all faked, so no unit test spawns netstat, lsof,
+// ss, ps, tasklist, powershell or docker, and none opens a real socket. A
+// handler that reaches the OS behind those seams is a bug — it makes the test
+// measure the runner instead of the handler.
 type testHarness struct {
 	t    *testing.T
 	srv  *Server
@@ -28,8 +55,10 @@ type testHarness struct {
 	stopLoop context.CancelFunc
 	loopDone chan struct{}
 
-	mu   sync.Mutex
-	rows []ports.ListeningPort
+	mu    sync.Mutex
+	rows  []ports.ListeningPort
+	edges []ports.Connection
+	probe scanner.Probe
 }
 
 // newHarness builds a server whose scan loop is already running, so a change to
@@ -41,12 +70,29 @@ type testHarness struct {
 func newHarness(t *testing.T, ctx context.Context) *testHarness {
 	t.Helper()
 	h := &testHarness{t: t, loopDone: make(chan struct{})}
+	h.probe = refusedProbe
 	h.loop = scanner.New(scanner.Options{
 		DaemonVersion: "test",
 		Scan: func(scanner.Include) ([]ports.ListeningPort, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return append([]ports.ListeningPort{}, h.rows...), nil
+		},
+		// Graph and Probe are faked for the same reason Scan is. A handler
+		// test that let them through would pay for `netstat`/`lsof`/`ss`, a
+		// `docker inspect` and a real TCP connect on whatever machine CI is —
+		// seconds on a Windows runner — and would then be measuring the runner
+		// rather than the handler. See scanner.Options.
+		Graph: func([]ports.ListeningPort) ([]ports.Connection, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return append([]ports.Connection{}, h.edges...), nil
+		},
+		Probe: func(host string, port int, path string, timeout time.Duration) ports.HealthResult {
+			h.mu.Lock()
+			probe := h.probe
+			h.mu.Unlock()
+			return probe(host, port, path, timeout)
 		},
 	})
 	h.srv = New(Options{Socket: "/test/sonar.sock", Version: "test", Scanner: h.loop})
@@ -86,6 +132,26 @@ func (h *testHarness) setRows(rows ...ports.ListeningPort) {
 	h.mu.Unlock()
 }
 
+// setEdges replaces the connections the fake graph reports.
+func (h *testHarness) setEdges(edges ...ports.Connection) {
+	h.mu.Lock()
+	h.edges = edges
+	h.mu.Unlock()
+}
+
+// setProbe replaces the fake health probe.
+func (h *testHarness) setProbe(p scanner.Probe) {
+	h.mu.Lock()
+	h.probe = p
+	h.mu.Unlock()
+}
+
+// refusedProbe is the harness default: nothing is really listening behind the
+// fake rows, so every probe is refused, deterministically and instantly.
+func refusedProbe(_ string, _ int, _ string, _ time.Duration) ports.HealthResult {
+	return ports.HealthResult{Status: "refused"}
+}
+
 // dial attaches a client to the server over an in-memory pipe.
 func (h *testHarness) dial(ctx context.Context) *testClient {
 	h.t.Helper()
@@ -112,7 +178,7 @@ func (c *testClient) send(method string, params any) string {
 	if err != nil {
 		c.t.Fatalf("marshalling params: %v", err)
 	}
-	c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	c.conn.SetWriteDeadline(time.Now().Add(pipeWrite))
 	if err := json.NewEncoder(c.conn).Encode(rpc.Request{
 		JSONRPC: rpc.Version, ID: id, Method: method, Params: raw,
 	}); err != nil {
@@ -124,7 +190,7 @@ func (c *testClient) send(method string, params any) string {
 // read returns the next message from the daemon.
 func (c *testClient) read() rpc.Message {
 	c.t.Helper()
-	c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(pipeRead))
 	line, err := c.r.ReadBytes('\n')
 	if err != nil {
 		c.t.Fatalf("reading from daemon: %v", err)
@@ -304,7 +370,7 @@ func TestSubscribeThenDelta(t *testing.T) {
 
 	var delta state.Delta
 	var event state.Event
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(settle)
 	for (len(delta.Ports.Added) == 0 || event.Kind == "") && time.Now().Before(deadline) {
 		m := c.read()
 		switch m.Method {
@@ -463,7 +529,7 @@ func TestOversizeMessageIsRejectedNotFatal(t *testing.T) {
 	c := newHarness(t, ctx).dial(ctx)
 
 	go func() {
-		c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		c.conn.SetWriteDeadline(time.Now().Add(pipeWrite))
 		io.WriteString(c.conn, `{"jsonrpc":"2.0","id":1,"method":"daemon.status","params":{"pad":"`)
 		chunk := strings.Repeat("x", 64<<10)
 		for written := 0; written < MaxMessageBytes+(1<<20); written += len(chunk) {

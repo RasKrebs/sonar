@@ -124,9 +124,10 @@ func TestUptimeOfAnUnparseableStartIsEmpty(t *testing.T) {
 
 // TestIsWindowsDesktopApp is the classification that decides whether a Windows
 // port is visible at all: an app is hidden from `sonar list` and never joins a
-// group. Two rules used to hide everything on a CI runner — a binary in
-// %LOCALAPPDATA%\Temp is not an installed app, and an unidentified process is
-// not evidence of one.
+// group. Three rules used to hide everything on a CI runner — a binary in any
+// temp directory is not an installed app, an unidentified process is not
+// evidence of one, and the temp rule has to be checked before the \Windows\
+// and \AppData\ rules that every temp directory lives inside.
 func TestIsWindowsDesktopApp(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -145,6 +146,23 @@ func TestIsWindowsDesktopApp(t *testing.T) {
 		{"store app", `C:\Program Files\WindowsApps\Something\app.exe`, "app.exe", 902, true},
 		{"dev server", `C:\Program Files\nodejs\node.exe server.js`, "node.exe", 903, false},
 		{"known app by name only", "", "chrome.exe", 904, true},
+		// The exact shape of the CI regression: the CIM query withheld the
+		// command line, tasklist supplied the image name, and the row has to
+		// stay visible on that alone (contract §27).
+		{"identity only from tasklist", "", "listener.exe", 905, false},
+
+		// Every temp directory, not just %LOCALAPPDATA%\Temp. A scratch
+		// binary under C:\Windows\Temp used to be classified as a Windows
+		// system service and hidden, and one under a runner's D:\a\_temp was
+		// only saved by not matching any rule at all.
+		{"windows temp", `C:\Windows\Temp\sonar-itest-listener1\listener.exe 59028`, "listener.exe", 7277, false},
+		{"runner temp", `D:\a\_temp\sonar-itest-listener1\listener.exe 59028`, "listener.exe", 7278, false},
+		{"quoted temp path", `"C:\Users\runneradmin\AppData\Local\Temp\x\listener.exe" 59028`, "listener.exe", 7279, false},
+		{"tmp directory", `C:\tmp\build\api.exe`, "api.exe", 7280, false},
+		{"forward slashes", `C:/Users/dev/AppData/Local/Temp/x/listener.exe`, "listener.exe", 7281, false},
+		// "temp" has to be a whole path segment: a real application does not
+		// stop being one because its name looks like the word.
+		{"template is not temp", `C:\Users\dev\AppData\Local\Templates\thing.exe`, "thing.exe", 7282, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

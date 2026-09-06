@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
-	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/scanner"
 	"github.com/raskrebs/sonar/internal/state"
@@ -230,7 +229,7 @@ func handlePortsInspect(_ context.Context, req *Request) (any, error) {
 		return nil, err
 	}
 
-	probe := ports.ProbeHealth(row.BindAddress, row.Port, "/", scanner.HealthTimeout)
+	probe := req.Runtime.Scanner.Probe(row.BindAddress, row.Port, "/", scanner.HealthTimeout)
 	row.Health = &state.Health{
 		Status:    probe.Status,
 		Code:      probe.StatusCode,
@@ -249,14 +248,15 @@ func handlePortsInspect(_ context.Context, req *Request) (any, error) {
 	return rpc.PortsInspectResult{
 		Port:        row,
 		LogSources:  sources,
-		Connections: peersOf(row, rows),
+		Connections: peersOf(req.Runtime, row, rows),
 	}, nil
 }
 
 // peersOf lists the listening ports this one is connected to. It reuses the
-// same established-connection scan `sonar graph` runs.
-func peersOf(row state.Port, rows []state.Port) []rpc.Connection {
-	edges, err := ports.BuildGraph(state.ToListeningAll(rows))
+// same established-connection lookup `sonar graph` runs, through the scanner's
+// seam, and over the listeners the snapshot already gave us.
+func peersOf(rt *Runtime, row state.Port, rows []state.Port) []rpc.Connection {
+	edges, err := rt.Scanner.Graph(state.ToListeningAll(rows))
 	if err != nil {
 		return []rpc.Connection{}
 	}
@@ -367,7 +367,7 @@ func handlePortsHealth(_ context.Context, req *Request) (any, error) {
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := ports.ProbeHealth(targets[i].BindAddress, targets[i].Port, "/", scanner.HealthTimeout)
+			r := req.Runtime.Scanner.Probe(targets[i].BindAddress, targets[i].Port, "/", scanner.HealthTimeout)
 			// One health vocabulary on the wire: the probe's finer verdict
 			// travels as the reason (step 1A.7).
 			status, reason := state.NormalizeHealth(r.Status)
@@ -389,17 +389,14 @@ func handlePortsGraph(_ context.Context, req *Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The listeners come from the snapshot; only the connections between them
+	// are asked of the OS, and that goes through the scanner's seam.
 	listening := state.ToListeningAll(rows)
 
-	edges, err := ports.BuildGraph(listening)
+	edges, err := req.Runtime.Scanner.Graph(listening)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "building the connection graph: "+err.Error(), "")
 	}
-	containerEdges, err := docker.BuildDockerGraph(listening)
-	if err != nil {
-		return nil, rpc.NewError(rpc.CodeInternal, "building the container graph: "+err.Error(), "")
-	}
-	edges = append(edges, containerEdges...)
 
 	pidOf := map[int]int{}
 	for _, r := range rows {

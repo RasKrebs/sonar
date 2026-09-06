@@ -193,13 +193,15 @@ func (x *Index) Invalid() []InvalidConfig {
 // contains it, or one of whose services declares it, with the process cwd
 // under the file's directory. The deepest matching config wins.
 //
-// A port with no cwd is not out of reach. Windows has no per-process working
-// directory the scanner can read (see ports.batchGetCwds), so requiring one
-// left every `.sonar.yaml` unable to claim the ports it declares there — the
-// group existed in the index and no listener ever joined it. When the cwd is
-// missing the question that remains is still answerable: is there exactly one
-// known config claiming this port? One is an answer. Two is a guess, and a
-// guess is worse than no group at all.
+// A port with no cwd is not out of reach. Every platform can read a working
+// directory now (see ports.batchGetCwds), but plenty of individual rows still
+// arrive without one: a Docker container has no cwd of its own, and a process
+// that denies the scanner access keeps its own. Requiring one left every
+// `.sonar.yaml` unable to claim the ports it declares — the group existed in
+// the index and no listener ever joined it. When the cwd is missing the
+// question that remains is still answerable: is there exactly one known config
+// claiming this port? One is an answer. Two is a guess, and a guess is worse
+// than no group at all.
 func (x *Index) MatchPort(p state.Port) (*Config, string, bool) {
 	if p.Cwd != "" {
 		for _, cfg := range x.Configs() {

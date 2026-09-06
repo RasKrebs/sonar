@@ -26,6 +26,7 @@ func RenderTree(w io.Writer, pp []ports.ListeningPort, gg []state.Group) {
 		fmt.Fprintln(w, "No listening ports found.")
 		return
 	}
+	pp = dedupeFamilies(pp)
 
 	byGroup := map[string][]ports.ListeningPort{}
 	for _, p := range pp {
@@ -89,6 +90,41 @@ func RenderTree(w io.Writer, pp []ports.ListeningPort, gg []state.Group) {
 	}
 
 	fmt.Fprintf(w, "\n%s\n", Dim(treeSummary(len(pp), len(names), byGroup)))
+}
+
+// dedupeFamilies collapses the rows one process contributes for one port.
+//
+// A service bound on both families is two rows — 127.0.0.1 and [::1] — and the
+// table view is right to show both: they are two sockets, and which one a
+// client reaches matters. The tree is a different question. It answers "what is
+// running, and which project does it belong to", and printing
+//
+//	├─ 49665  wininit.exe   http://localhost:49665
+//	├─ 49665  wininit.exe   http://localhost:49665
+//
+// answers it twice, inflates every group's port count, and is worst exactly
+// where the tree is most useful — a dual-stack dev server under its repo.
+//
+// The first row for a (port, pid) pair wins, so the ordering the scanner
+// produces decides which address is shown, and `--json` and the table keep
+// every row. A pid of 0 (an identity the scanner could not resolve) still
+// collapses per port: two families of one unknown listener are one listener.
+func dedupeFamilies(pp []ports.ListeningPort) []ports.ListeningPort {
+	type key struct {
+		port int
+		pid  int
+	}
+	seen := make(map[key]bool, len(pp))
+	out := make([]ports.ListeningPort, 0, len(pp))
+	for _, p := range pp {
+		k := key{port: p.Port, pid: p.PID}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // groupHeader is the "name  (n ports, status)" line, with the group's root

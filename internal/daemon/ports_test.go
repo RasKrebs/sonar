@@ -8,6 +8,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/state"
 )
 
 // fakeRows is the snapshot every read handler is exercised against: a user
@@ -44,12 +45,23 @@ func fakeRows() []ports.ListeningPort {
 	}
 }
 
-// newPortsHarness starts a server whose scanner returns fakeRows and returns a
-// connected test client.
+// fakeEdges is the connection graph that goes with fakeRows: the web server on
+// 3000 talks to the database on 5432. It is a fixture rather than a lookup so
+// the graph handler is measured on its own, without netstat, lsof, ss or
+// docker.
+func fakeEdges() []ports.Connection {
+	return []ports.Connection{
+		{FromPort: 3000, FromProcess: "node", ToPort: 5432, ToProcess: "com.docker.backend"},
+	}
+}
+
+// newPortsHarness starts a server whose scanner returns fakeRows and fakeEdges
+// and returns a connected test client.
 func newPortsHarness(t *testing.T, ctx context.Context) *testClient {
 	t.Helper()
 	h := newHarness(t, ctx)
 	h.setRows(fakeRows()...)
+	h.setEdges(fakeEdges()...)
 	return h.dial(ctx)
 }
 
@@ -276,23 +288,35 @@ func TestPortsNextSkipsListeningPorts(t *testing.T) {
 	}
 }
 
+// TestPortsGraphAndHealthShapes measures the two handlers, not the machine
+// underneath them: the connection graph and the health probe both come from
+// the harness's fixtures, so the assertions are exact and the same everywhere.
+// They used to reach the OS — netstat plus a docker inspect for the fake
+// container row, and a real TCP connect — which on the Windows runner overran
+// the harness's read deadline and failed as "read pipe: i/o timeout".
 func TestPortsGraphAndHealthShapes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := newPortsHarness(t, ctx)
 
 	var graph rpc.PortsGraphResult
-	switch e := c.call("ports.graph", rpc.Empty{}, &graph); {
-	case e == nil:
-		if graph.Connections == nil {
-			t.Fatal("connections must always be an array")
-		}
-	case e.Code == rpc.CodeInternal:
-		// No lsof / ss / docker on this machine: the shape is all this test
-		// can check, and there is nothing to check it against.
-		t.Log("connection graph unavailable here:", e.Message)
-	default:
+	if e := c.call("ports.graph", rpc.Empty{}, &graph); e != nil {
 		t.Fatalf("ports.graph: %v", e)
+	}
+	if graph.Connections == nil {
+		t.Fatal("connections must always be an array")
+	}
+	if len(graph.Connections) != 1 {
+		t.Fatalf("ports.graph = %+v, want the one fixture edge", graph.Connections)
+	}
+	// The pids are the handler's own work: the edge carries ports, and the
+	// handler joins them against the snapshot it already had.
+	want := rpc.GraphEdge{
+		FromPort: 3000, FromPID: 100, FromProcess: "node",
+		ToPort: 5432, ToPID: 200, ToProcess: "com.docker.backend",
+	}
+	if graph.Connections[0] != want {
+		t.Fatalf("ports.graph edge = %+v, want %+v", graph.Connections[0], want)
 	}
 
 	// Probing a port nothing is listening on is the deterministic case: it is
@@ -304,8 +328,43 @@ func TestPortsGraphAndHealthShapes(t *testing.T) {
 	if len(health.Results) != 1 || health.Results[0].Port != 1 {
 		t.Fatalf("ports.health = %+v, want one row for port 1", health.Results)
 	}
-	if health.Results[0].Status == "" {
-		t.Fatal("ports.health returned an empty status")
+	if health.Results[0].Status != state.HealthFail {
+		t.Errorf("ports.health status = %q, want %q", health.Results[0].Status, state.HealthFail)
+	}
+	// The probe's finer verdict travels as the reason (step 1A.7).
+	if health.Results[0].Reason != "refused" {
+		t.Errorf("ports.health reason = %q, want %q", health.Results[0].Reason, "refused")
+	}
+}
+
+// TestPortsGraphAndHealthDoNotRescanListeners pins the other half of the fix:
+// both handlers answer from the snapshot the loop already published, so N
+// clients asking cost the machine no extra listener scan.
+func TestPortsGraphAndHealthDoNotRescanListeners(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := newHarness(t, ctx)
+	h.setRows(fakeRows()...)
+	h.setEdges(fakeEdges()...)
+	c := h.dial(ctx)
+
+	// Prime the cache and take the scan counter from there.
+	var list listResult
+	if e := c.call("ports.list", rpc.PortsListParams{}, &list); e != nil {
+		t.Fatalf("ports.list: %v", e)
+	}
+	before := h.loop.Status().Scans
+
+	for i := 0; i < 3; i++ {
+		if e := c.call("ports.graph", rpc.Empty{}, &rpc.PortsGraphResult{}); e != nil {
+			t.Fatalf("ports.graph: %v", e)
+		}
+		if e := c.call("ports.health", rpc.PortsHealthParams{Ports: []int{1}}, &rpc.PortsHealthResult{}); e != nil {
+			t.Fatalf("ports.health: %v", e)
+		}
+	}
+	if got := h.loop.Status().Scans - before; got > 1 {
+		t.Errorf("six reads cost %d listener scans, want at most 1 (the cache TTL)", got)
 	}
 }
 
@@ -383,7 +442,7 @@ func TestPortsWaitTimesOut(t *testing.T) {
 		t.Fatalf("ports.wait: %v", e)
 	}
 
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(settle)
 	done := make(chan rpc.PortsWaitEnd, 1)
 	go func() {
 		msg := c.nextNotification(rpc.MethodStreamEnd)
