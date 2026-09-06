@@ -62,6 +62,50 @@ ungrouped  (1 port)
 	}
 }
 
+// TestRenderTreeCollapsesDualStackRows: a service listening on both families
+// is one entry in the tree, and the port count says one. Windows shows this
+// most — every listener there comes back as an IPv4 row and an IPv6 row — and
+// the tree printed each one twice, under a heading claiming twice the ports.
+func TestRenderTreeCollapsesDualStackRows(t *testing.T) {
+	NoColor = true
+	pp := []ports.ListeningPort{
+		{Port: 8000, BindAddress: "127.0.0.1", PID: 42, Process: "python3", Group: "api"},
+		{Port: 8000, BindAddress: "::1", PID: 42, Process: "python3", Group: "api"},
+		// Same port, a different process: two listeners, two rows.
+		{Port: 9000, BindAddress: "127.0.0.1", PID: 7, Process: "node", Group: "api"},
+		{Port: 9000, BindAddress: "127.0.0.2", PID: 8, Process: "node", Group: "api"},
+	}
+
+	var buf bytes.Buffer
+	RenderTree(&buf, pp, nil)
+	got := buf.String()
+
+	rows := 0
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "├─") || strings.HasPrefix(line, "└─") {
+			rows++
+		}
+	}
+	if rows != 3 {
+		t.Errorf("the tree printed %d rows, want 3:\n%s", rows, got)
+	}
+	if n := strings.Count(got, ":8000"); n != 1 {
+		t.Errorf("port 8000 appears %d times, want once:\n%s", n, got)
+	}
+	// Same port, two pids: two listeners, and collapsing them would hide a
+	// genuine conflict.
+	if n := strings.Count(got, ":9000"); n != 2 {
+		t.Errorf("port 9000 appears %d times, want twice (two pids):\n%s", n, got)
+	}
+	if !strings.Contains(got, "3 ports") {
+		t.Errorf("the summary does not count the rows it printed:\n%s", got)
+	}
+	// The first row for a pair wins, so the IPv4 address is the one shown.
+	if !strings.Contains(got, "http://127.0.0.1:8000") {
+		t.Errorf("the surviving row is not the first one:\n%s", got)
+	}
+}
+
 func TestRenderTreeEmpty(t *testing.T) {
 	NoColor = true
 	var buf bytes.Buffer
