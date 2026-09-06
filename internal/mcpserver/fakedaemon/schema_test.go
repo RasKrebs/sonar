@@ -36,6 +36,15 @@ func TestRepliesValidateAgainstTheProtocolSchema(t *testing.T) {
 		{"ports.list", rpc.PortsListParams{Include: rpc.Include{"stats", "health"}}, "PortsListResult"},
 		{"ports.inspect", rpc.Selector{Port: intp(3000)}, "PortsInspectResult"},
 		{"groups.list", rpc.Empty{}, "GroupsListResult"},
+		{"ports.next", rpc.PortsNextParams{Start: 3001}, "PortsNextResult"},
+		{"ports.health", rpc.PortsHealthParams{Ports: []int{3000, 9999}}, "PortsHealthResult"},
+		{"ports.logs", rpc.PortsLogsParams{Selector: rpc.Selector{Port: intp(3000)}}, "PortsLogsResult"},
+		{"ports.graph", rpc.Empty{}, "PortsGraphResult"},
+		{"ports.history", rpc.PortsHistoryParams{Since: strp("48h")}, "PortsHistoryResult"},
+		{"sessions.list", rpc.SessionsListParams{}, "SessionsListResult"},
+		{"claims.acquire", rpc.ClaimsAcquireParams{Project: "shop"}, "ClaimsAcquireResult"},
+		{"claims.list", rpc.Empty{}, "ClaimsListResult"},
+		{"claims.release", rpc.ClaimsReleaseParams{Key: "shop/main"}, "ClaimsReleaseResult"},
 	}
 
 	for _, tc := range cases {
@@ -46,6 +55,69 @@ func TestRepliesValidateAgainstTheProtocolSchema(t *testing.T) {
 			}
 			validate(t, tc.def, raw)
 		})
+	}
+}
+
+// TestWaitStreamValidates covers the streaming half: ports.wait chunks and its
+// end payload are the shapes the contract publishes, and the stream ends even
+// when the client cancels it.
+func TestWaitStreamValidates(t *testing.T) {
+	c := connect(t, fakedaemon.DefaultFixture())
+
+	st, err := c.Stream(t.Context(), "ports.wait", rpc.PortsWaitParams{
+		Ports: []int{3000, 65000}, TimeoutMs: 200,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ports.wait: %v", err)
+	}
+	chunks := 0
+	for raw := range st.Chunks() {
+		validate(t, "PortsWaitChunk", raw)
+		chunks++
+	}
+	if chunks != 1 {
+		t.Errorf("got %d chunks, want one for the listening port", chunks)
+	}
+	end := <-st.End()
+	if end.Err != nil {
+		t.Fatalf("the stream ended with an error: %v", end.Err)
+	}
+	validate(t, "PortsWaitEnd", end.Data)
+
+	var payload rpc.PortsWaitEnd
+	if err := end.Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Ready) != 1 || payload.Ready[0] != 3000 {
+		t.Errorf("ready = %v, want [3000]", payload.Ready)
+	}
+	if len(payload.TimedOut) != 1 || payload.TimedOut[0] != 65000 {
+		t.Errorf("timed_out = %v, want [65000]", payload.TimedOut)
+	}
+}
+
+// TestWaitStreamCancels is contract §20: a cancelled stream still ends, with
+// no error and with whatever it had.
+func TestWaitStreamCancels(t *testing.T) {
+	c := connect(t, fakedaemon.DefaultFixture())
+
+	st, err := c.Stream(t.Context(), "ports.wait", rpc.PortsWaitParams{
+		Ports: []int{65000}, TimeoutMs: 60_000,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ports.wait: %v", err)
+	}
+	if err := st.Cancel(t.Context()); err != nil {
+		t.Fatalf("stream.cancel: %v", err)
+	}
+	select {
+	case end := <-st.End():
+		if end.Err != nil {
+			t.Fatalf("a cancelled stream ended with an error: %v", end.Err)
+		}
+		validate(t, "PortsWaitEnd", end.Data)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cancelled stream never ended")
 	}
 }
 

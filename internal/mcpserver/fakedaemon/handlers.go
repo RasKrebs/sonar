@@ -22,6 +22,7 @@ func (f *Fake) registerCore() {
 	f.Handle("groups.list", func(json.RawMessage) (any, error) {
 		return rpc.GroupsListResult{Groups: f.Fixture().Groups}, nil
 	})
+	f.registerQuery()
 }
 
 func (f *Fake) handleHello(raw json.RawMessage) (any, error) {

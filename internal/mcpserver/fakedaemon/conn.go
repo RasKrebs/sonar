@@ -18,9 +18,10 @@ type conn struct {
 	nc  net.Conn
 	enc *rpc.Encoder
 
-	mu     sync.Mutex
-	subbed bool
-	closed bool
+	mu      sync.Mutex
+	subbed  bool
+	closed  bool
+	streams map[string]*Stream
 }
 
 func newConn(f *Fake, nc net.Conn) *conn {
@@ -47,6 +48,11 @@ func (c *conn) serve() {
 }
 
 func (c *conn) answer(msg rpc.Message) {
+	if h, ok := c.f.streamHandler(msg.Method); ok {
+		c.f.count(msg.Method)
+		c.answerStream(msg, h)
+		return
+	}
 	result, err := c.handle(msg.Method, msg.Params)
 	resp := rpc.Response{JSONRPC: rpc.Version, ID: msg.ID}
 	if err != nil {
@@ -76,6 +82,9 @@ func (c *conn) handle(method string, params json.RawMessage) (any, error) {
 		c.f.count(method)
 		c.setSubscribed(false)
 		return rpc.OKResult{OK: true}, nil
+	case rpc.MethodStreamCancel:
+		c.f.count(method)
+		return c.cancelStream(params)
 	}
 	return c.f.dispatch(method, params)
 }
