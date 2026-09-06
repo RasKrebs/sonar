@@ -5,6 +5,7 @@ package spawn
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,17 @@ import (
 	"time"
 )
 
+// Every wait in this file is a poll with the same generous bound. These tests
+// fork real processes and run next to the rest of the suite, so a deadline
+// tight enough to feel fast is only a bet that the machine is idle: on a loaded
+// CI runner a fork, an exec and a first write can easily take seconds. A
+// correct run reaches the condition long before the deadline and never spends
+// it, so the cost of being generous is paid only by a genuine failure.
+const (
+	waitTimeout  = 30 * time.Second
+	waitInterval = 50 * time.Millisecond
+)
+
 // alive reports whether a pid still exists (signal 0 is the portable probe).
 func alive(pid int) bool {
 	if pid <= 0 {
@@ -23,31 +35,96 @@ func alive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
+// waitUntil polls cond until it holds or waitTimeout passes. cond is always
+// evaluated once more when the deadline expires, so a condition that becomes
+// true during the last sleep is not reported as a timeout.
+func waitUntil(cond func() bool) bool {
+	deadline := time.Now().Add(waitTimeout)
+	for {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return cond()
+		}
+		time.Sleep(waitInterval)
+	}
+}
+
 // waitGone polls until pid is gone, or fails the test.
 func waitGone(t *testing.T, what string, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if !alive(pid) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	if !waitUntil(func() bool { return !alive(pid) }) {
+		t.Fatalf("%s (pid %d) is still running after %s", what, pid, waitTimeout)
 	}
-	t.Fatalf("%s (pid %d) is still running", what, pid)
 }
 
-// waitFile polls until path exists and is non-empty, then returns its content.
-func waitFile(t *testing.T, path string, timeout time.Duration) string {
+// waitFile polls until path holds something other than whitespace and returns
+// it. Used for readiness files that are published atomically (written to a
+// temporary name and renamed), so any content at all is the whole content.
+func waitFile(t *testing.T, path string) string {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(b)) > 0 {
-			return string(b)
+	var last string
+	if !waitUntil(func() bool {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return false
 		}
-		time.Sleep(20 * time.Millisecond)
+		last = string(b)
+		return len(bytes.TrimSpace(b)) > 0
+	}) {
+		t.Fatalf("%s did not appear within %s (last read %q)", path, waitTimeout, last)
 	}
-	t.Fatalf("%s did not appear within %s", path, timeout)
-	return ""
+	return last
+}
+
+// waitFileContains polls until path contains want.
+//
+// A single read is never enough for a file a child process is still writing:
+// the read can land between the open and the first write, in the middle of a
+// line, or — on a host where /bin/sh is dash — after a warning the shell
+// printed ahead of the output under test. Waiting for the content that matters
+// is the only check that means what it says.
+func waitFileContains(t *testing.T, path, want string) string {
+	t.Helper()
+	var last string
+	if !waitUntil(func() bool {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		last = string(b)
+		return strings.Contains(last, want)
+	}) {
+		t.Fatalf("%s never contained %q within %s (last read %q)", path, want, waitTimeout, last)
+	}
+	return last
+}
+
+// waitPID is waitFile plus the parse every caller here does.
+func waitPID(t *testing.T, path string) int {
+	t.Helper()
+	raw := strings.TrimSpace(waitFile(t, path))
+	pid, err := strconv.Atoi(raw)
+	if err != nil {
+		t.Fatalf("%s = %q, want a pid: %v", path, raw, err)
+	}
+	return pid
+}
+
+// publishPID is the shell fragment a test helper uses to announce its own pid:
+// write to a temporary name, then rename. A reader therefore sees either no
+// file or the complete pid, never the empty file a plain `>` redirection leaves
+// behind between the open and the write. The destination is $0, which `sh -c
+// SCRIPT NAME` sets to NAME — that keeps the path out of the quoted script.
+//
+// It is POSIX sh and nothing more, because /bin/sh is dash on Debian and
+// Ubuntu: no bashisms, and every expansion of $0 is quoted.
+const publishPID = `echo $$ > "$0.tmp" && mv "$0.tmp" "$0"`
+
+// shQuote wraps s for a POSIX sh single-quoted word.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func TestSpawnInjectsTheRunEnvironment(t *testing.T) {
@@ -101,16 +178,19 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(dir, "pids")
 	script := filepath.Join(dir, "dev.sh")
 	// A dev.sh whose real work happens in a grandchild, the shape of every
-	// `npm run dev`: killing the child alone would orphan the listener.
+	// `npm run dev`: killing the child alone would orphan the listener. The
+	// grandchild publishes its pid before it does anything else, so the test's
+	// wait is bounded by one fork and not by whatever the helper does next.
 	body := "#!/bin/sh\n" +
-		"sh -c 'echo $$ > " + pidFile + "; exec sleep 300'\n"
+		"sh -c '" + publishPID + "; exec sleep 300' " + shQuote(pidFile) + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Files, not pipes: a surviving grandchild would hold a pipe open and hide
 	// the very failure this test is looking for.
-	out, err := os.Create(filepath.Join(dir, "out.log"))
+	logPath := filepath.Join(dir, "out.log")
+	out, err := os.Create(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,14 +210,23 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	fwd.Forward(h)
+	// Only on a failure: a passing run has already reaped both processes, and
+	// signalling a reaped pid risks hitting whatever the OS recycled it into.
+	t.Cleanup(func() {
+		if t.Failed() {
+			_ = h.Kill()
+		}
+	})
 
-	grandchild, err := strconv.Atoi(strings.TrimSpace(waitFile(t, pidFile, 5*time.Second)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	grandchild := waitPID(t, pidFile)
 	if !alive(grandchild) {
 		t.Fatalf("the grandchild (pid %d) never started", grandchild)
 	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			_ = syscall.Kill(grandchild, syscall.SIGKILL)
+		}
+	})
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
@@ -150,9 +239,10 @@ func TestForwardedInterruptKillsTheWholeProcessGroup(t *testing.T) {
 		if code != 130 {
 			t.Errorf("exit code = %d, want 130 (128+SIGINT)", code)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitTimeout):
 		_ = h.Kill()
-		t.Fatal("the child did not exit after a forwarded SIGINT")
+		b, _ := os.ReadFile(logPath)
+		t.Fatalf("the child did not exit after a forwarded SIGINT within %s (log %q)", waitTimeout, b)
 	}
 	waitGone(t, "the grandchild", grandchild)
 }
@@ -163,31 +253,42 @@ func TestDetachedRunSurvivesItsStarter(t *testing.T) {
 	dir := t.TempDir()
 	logDir := filepath.Join(dir, "logs")
 	pidFile := filepath.Join(dir, "pid")
+	// The detached child's working directory has to outlive the starter, so it
+	// is this test's temp dir and not one the starter cleans up on its way out.
+	// A child left standing in a deleted directory is not merely untidy: dash
+	// greets it with `sh: 0: getcwd() failed` on the run's own log, ahead of
+	// anything the command prints.
+	childCwd := filepath.Join(dir, "cwd")
+	if err := os.MkdirAll(childCwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	starter := exec.Command(os.Args[0], "-test.run=TestSpawnDetachedHelper", "-test.v")
 	starter.Env = append(os.Environ(),
 		"SONAR_SPAWN_HELPER=1",
 		"SONAR_LOG_DIR="+logDir,
 		"SONAR_SPAWN_PIDFILE="+pidFile,
+		"SONAR_SPAWN_CWD="+childCwd,
 	)
 	if out, err := starter.CombinedOutput(); err != nil {
 		t.Fatalf("starter failed: %v: %s", err, out)
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(waitFile(t, pidFile, 5*time.Second)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The starter only writes the pid file once the child's output is on disk,
+	// so by here the log is readable — but it is still polled, because the
+	// starter is not the only writer this test does not synchronise with.
+	pid := waitPID(t, pidFile)
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
 
 	if !alive(pid) {
 		t.Fatalf("the detached run (pid %d) died with its starter", pid)
 	}
-	logPath := filepath.Join(logDir, "itest", "sleeper.log")
-	if got := waitFile(t, logPath, 5*time.Second); !strings.Contains(got, "detached-hello") {
-		t.Fatalf("%s = %q, want the child's output", logPath, got)
-	}
+	waitFileContains(t, filepath.Join(logDir, "itest", "sleeper.log"), detachedMarker)
 }
+
+// detachedMarker is the line the detached run prints, and the readiness signal
+// the starter waits for before it publishes the run's pid.
+const detachedMarker = "detached-hello"
 
 // TestSpawnDetachedHelper is not a test: it is the starter process for
 // TestDetachedRunSurvivesItsStarter, and does nothing in a normal run.
@@ -195,9 +296,11 @@ func TestSpawnDetachedHelper(t *testing.T) {
 	if os.Getenv("SONAR_SPAWN_HELPER") == "" {
 		t.Skip("helper process for TestDetachedRunSurvivesItsStarter")
 	}
+	// `printf` rather than `echo`, and a marker with no escapes in it, so the
+	// line is byte-for-byte the same under every /bin/sh.
 	h, err := Spawn(context.Background(), Request{
-		Argv:   []string{"sh", "-c", "echo detached-hello; sleep 30"},
-		Cwd:    t.TempDir(),
+		Argv:   []string{"sh", "-c", fmt.Sprintf("printf '%%s\\n' %s; exec sleep 300", shQuote(detachedMarker))},
+		Cwd:    os.Getenv("SONAR_SPAWN_CWD"),
 		Group:  "itest",
 		Name:   "sleeper",
 		Detach: true,
@@ -205,8 +308,17 @@ func TestSpawnDetachedHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(os.Getenv("SONAR_SPAWN_PIDFILE"),
-		[]byte(strconv.Itoa(h.PID)), 0o644); err != nil {
+	// Readiness is the output itself: the pid file is published only once the
+	// marker has reached the log, so the parent never races the child's first
+	// write. Waiting on the log also flushes out the shell's own start-up
+	// noise, which lands there first when it lands at all.
+	waitFileContains(t, h.LogPath, detachedMarker)
+
+	pidFile := os.Getenv("SONAR_SPAWN_PIDFILE")
+	if err := os.WriteFile(pidFile+".tmp", []byte(strconv.Itoa(h.PID)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(pidFile+".tmp", pidFile); err != nil {
 		t.Fatal(err)
 	}
 }
