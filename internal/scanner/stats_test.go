@@ -393,3 +393,62 @@ func TestStatsTickIsSerializedWithScans(t *testing.T) {
 		last = p.next.Seq
 	}
 }
+
+// A stats tick refreshes this machine only. A registered remote host's rows —
+// its ports and its `hosts` entry — are merged back in untouched, and its pids
+// are never handed to the local process table: pid 100 on a build server is
+// not pid 100 here.
+func TestStatsTickLeavesRemoteRowsAlone(t *testing.T) {
+	r := newStatsRig(t)
+
+	var sampled []int
+	inner := r.loop.opts.SampleStats
+	r.loop.opts.SampleStats = func(pids []int) map[int]ports.ProcSample {
+		sampled = append([]int{}, pids...)
+		return inner(pids)
+	}
+
+	remotePort := state.Port{
+		Port: 3000, BindAddress: "0.0.0.0", PID: 100, Process: "node", Host: "build",
+		Stats: &state.Stats{CPUPercent: 42, MemoryRSS: 99, ThreadCount: 2},
+	}
+	r.loop.opts.Remote = func() state.Rows {
+		return state.Rows{
+			Ports: []state.Port{remotePort},
+			Hosts: []state.Host{{Name: "build", Address: "build", Status: state.HostConnected}},
+		}
+	}
+
+	r.loop.scanAndPublish(Include{Stats: true})
+	r.loop.sampleStats(Include{Stats: true})
+
+	for _, pid := range sampled {
+		if pid != 100 && pid != 200 {
+			t.Fatalf("the sampler was handed pid %d, which is not one of this machine's", pid)
+		}
+	}
+	if len(sampled) != 2 {
+		t.Fatalf("sampled pids = %v, want this machine's two (a remote pid 100 must not be added)", sampled)
+	}
+
+	snap := r.loop.CachedAll()
+	var found *state.Port
+	for i := range snap.Ports {
+		if !state.IsLocalhost(snap.Ports[i].Host) {
+			found = &snap.Ports[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("the stats tick dropped the remote host's port row")
+	}
+	if found.Stats == nil || *found.Stats != *remotePort.Stats {
+		t.Errorf("remote stats = %+v, want the bridge's own %+v", found.Stats, remotePort.Stats)
+	}
+	names := map[string]bool{}
+	for _, h := range snap.Hosts {
+		names[h.Name] = true
+	}
+	if !names["build"] || !names[state.LocalhostName] {
+		t.Errorf("hosts after a stats tick = %v, want both localhost and the remote", names)
+	}
+}

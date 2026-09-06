@@ -98,9 +98,14 @@ func (l *Loop) sampleStats(include Include) {
 
 // sampleStatsLocked builds the refreshed snapshot and commits it. Caller holds
 // scanMu.
+//
+// It rebuilds from l.local — this machine's own rows, before the remote hosts
+// were merged in — for the same reason RemoteChanged does: only localhost's
+// processes are sampled here, and re-merging the remote contribution keeps a
+// remote host's rows and its `hosts` entry intact across a local stats tick.
 func (l *Loop) sampleStatsLocked(include Include) (prev, next state.Snapshot, changed bool) {
 	l.mu.Lock()
-	prev, have := l.snap, l.haveSnap
+	prev, local, have := l.snap, l.local, l.haveSnap
 	l.mu.Unlock()
 	if !have {
 		// Nothing has been scanned yet, so there is no port set to refresh
@@ -111,22 +116,32 @@ func (l *Loop) sampleStatsLocked(include Include) (prev, next state.Snapshot, ch
 	// Both of these may fork `ps`; neither may hold l.mu while it does.
 	var samples map[int]ports.ProcSample
 	if include.Stats {
-		samples = l.opts.SampleStats(statsPIDs(prev.Ports))
+		samples = l.opts.SampleStats(statsPIDs(local.Ports))
 	}
 	host := l.collectHost()
 
 	at := l.now()
-	next = prev
-	next.At = at.Format(time.RFC3339)
-	next.Ports = refreshStats(prev.Ports, samples)
-	host.Ports, host.Groups = len(next.Ports), len(next.Groups)
-	host.LastSeen = next.At
-	next.Hosts = []state.Host{host}
+	local.Ports = refreshStats(local.Ports, samples)
+	host.Ports, host.Groups = len(local.Ports), len(local.Groups)
+	host.LastSeen = at.Format(time.RFC3339)
+	local.Hosts = []state.Host{host}
+	local = local.Tag(state.LocalhostName).Normalize()
 
-	changed = statsChanged(prev.Ports, next.Ports) || hostChanged(prev, next)
+	next = local.Append(l.remoteRows()).Into(state.Snapshot{
+		At:              at.Format(time.RFC3339),
+		DaemonVersion:   l.opts.DaemonVersion,
+		ExposuresActive: prev.ExposuresActive,
+	})
+
+	// The full comparison, not just the stats one: a remote bridge may have
+	// replaced its rows since the last publish without RemoteChanged having
+	// run yet, and committing those silently would lose them — the next
+	// RemoteChanged would diff against a snapshot that already carries them.
+	changed = snapshotChanged(prev, next, true) || hostChanged(prev, next)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.local = local
 	if !changed {
 		// Commit anyway, so the next tick diffs against the newest reading,
 		// but keep the seq: a snapshot nobody was told about must not consume
@@ -141,14 +156,19 @@ func (l *Loop) sampleStatsLocked(include Include) (prev, next state.Snapshot, ch
 	return prev, next, true
 }
 
-// statsPIDs are the processes a stats tick samples: the ones the last snapshot
-// already named, minus containers, whose stats come from Docker rather than
-// from the process table. A pid that has since exited is simply missing from
-// the sample.
+// statsPIDs are the processes a stats tick samples: the ones this machine's
+// half of the last snapshot already named, minus containers, whose stats come
+// from Docker rather than from the process table. A pid that has since exited
+// is simply missing from the sample. Remote hosts are never sampled here —
+// their pids belong to another machine's process table, and their own daemon
+// runs this same tick for them.
 func statsPIDs(pp []state.Port) []int {
 	pids := make([]int, 0, len(pp))
 	for i := range pp {
 		if pp[i].Type == state.TypeDocker || pp[i].PID <= 0 || pp[i].Stats == nil {
+			continue
+		}
+		if !state.IsLocalhost(pp[i].Host) {
 			continue
 		}
 		pids = append(pids, pp[i].PID)
@@ -157,9 +177,9 @@ func statsPIDs(pp []state.Port) []int {
 }
 
 // refreshStats returns the previous rows with only their `stats` object
-// replaced. Every other field — display name, group, health, started_at — is
-// carried through untouched, which is what makes a stats delta invisible to a
-// subscriber that did not ask for stats.
+// replaced. Every other field — display name, group, health, started_at, the
+// host tag — is carried through untouched, which is what makes a stats delta
+// invisible to a subscriber that did not ask for stats.
 //
 // A row the sample has nothing to say about keeps the stats it had: a pid that
 // vanished between the scan and this tick is dropped from the sample, not
@@ -191,25 +211,4 @@ func refreshStats(prev []state.Port, samples map[int]ports.ProcSample) []state.P
 		out[i].Stats = &st
 	}
 	return out
-}
-
-// statsChanged reports whether any row's stats object moved. It compares the
-// slices directly rather than going through state.DiffWithStats because a
-// stats tick changes nothing else by construction, and the answer decides
-// whether a delta is published at all.
-func statsChanged(prev, next []state.Port) bool {
-	if len(prev) != len(next) {
-		return true
-	}
-	for i := range next {
-		a, b := prev[i].Stats, next[i].Stats
-		switch {
-		case a == nil && b == nil:
-		case a == nil || b == nil:
-			return true
-		case *a != *b:
-			return true
-		}
-	}
-	return false
 }
