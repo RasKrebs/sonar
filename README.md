@@ -649,6 +649,67 @@ other suggests `sonar start --` when a bare dev server is about to run (it
 advises, it never blocks). Both take `--scope project|user`, `--print` and
 `--uninstall`.
 
+### `sonar doctor`
+
+One command that checks everything sonar depends on and says what to do about
+whatever is wrong. It is what the desktop app runs during onboarding, and what
+to run yourself when something is off.
+
+```sh
+sonar doctor                       # the table, and a one-line verdict
+sonar doctor --json                # {ok, checks, version, daemon_version}
+sonar doctor --only db_ok,tray     # just these
+sonar doctor --only mcp_registered # a whole family
+sonar doctor --project ~/code/api  # a project other than the working directory
+sonar doctor --fix --yes           # apply the safe repairs, then check again
+```
+
+```sh
+# check
+sonar doctor --only daemon_reachable,daemon_protocol,socket_permissions,db_ok
+sonar doctor --json --only config_parses | grep -q '"status": "ok"'
+sonar doctor --only mcp_registered --project . > /dev/null
+```
+
+Every check reports `ok`, `warn`, `fail` or `skip`. `skip` means there was
+nothing to look at — Cursor is not installed, the machine has no docker, the
+socket is a named pipe on Windows — and never counts against you. The exit code
+is 0 unless something **failed**, so `sonar doctor` belongs in a setup script.
+
+| check | what it means |
+| --- | --- |
+| `cli_on_path` | the binary you ran is the one PATH resolves; names the shadowing install if not |
+| `cli_version_current` | compared with the newest release, or `skip` when GitHub is not reachable in 2s |
+| `config_parses` | your `config.yaml` loads; a syntax error is reported with a line, a column and a caret |
+| `config_dir_writable` | the daemon can write its log, lock and database |
+| `daemon_reachable` | something is listening on the socket |
+| `daemon_version_matches` | the running daemon is the version of the CLI you are using |
+| `daemon_protocol` | the daemon's protocol major matches this build's |
+| `socket_permissions` | the socket is yours and 0600, in a 0700 directory (`skip` on Windows) |
+| `db_ok` | the database opens, is at the newest schema, and how big it is |
+| `mcp_registered.{claude_code,cursor,codex}` | sonar's MCP server is in that client's config |
+| `skills_installed` | the bundled skill is installed and current |
+| `hooks_installed` | the optional Claude Code hooks are installed |
+| `project_config` | this project has a `.sonar.yaml` that loads |
+| `docker` | the docker CLI is there and its daemon answers |
+| `tray` | the superseded macOS `sonar-tray` binary is still around |
+
+`--fix` applies only the repairs that are safe to make unattended, and asks
+first unless you pass `--yes`: it moves an unparseable `config.yaml` to
+`config.yaml.broken-<timestamp>` and writes a fresh template (nothing is ever
+deleted), restarts a daemon that is not running, and runs the
+`sonar install mcp|skills|hooks` command the check names — from the working
+directory, the way you would type it, so run `--fix` inside the project you are
+repairing rather than pointing `--project` at it. Then it checks again.
+Anything it will not touch — a shadowing binary on PATH, a skill sonar did not
+write — is left to you with the exact command in the `fix` column.
+
+The desktop app calls the same checks over the daemon's `daemon.doctor` method
+instead of shelling out. The daemon runs everything it can from its own
+process; the three checks that are about the CLI binary you invoked
+(`cli_on_path`, `cli_version_current`, `daemon_version_matches`) come back as
+`skip` with a detail saying so.
+
 ### The desktop app
 
 The Sonar app is the same picture in a window and in the menu bar or system
@@ -740,12 +801,16 @@ daemon: check `docker ps`. A process that ignores SIGTERM needs `-f`, and one
 supervised by something else (systemd, Compose `restart: always`) comes back
 by design — stop the supervisor.
 
-**Reporting a bug.** Include these two, plus the last lines of
-`sonar daemon log`:
+**Nothing works and you are not sure why.** `sonar doctor` checks the binary,
+the config, the daemon, the database and every integration in one go, and
+prints the command that fixes each thing it finds.
+
+**Reporting a bug.** Include these, plus the last lines of `sonar daemon log`:
 
 ```sh
 sonar version
 sonar daemon status
+sonar doctor --json
 # check
 ```
 
