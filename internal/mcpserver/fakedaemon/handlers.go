@@ -22,6 +22,7 @@ func (f *Fake) registerCore() {
 	f.Handle("groups.list", func(json.RawMessage) (any, error) {
 		return rpc.GroupsListResult{Groups: f.Fixture().Groups}, nil
 	})
+	f.registerQuery()
 }
 
 func (f *Fake) handleHello(raw json.RawMessage) (any, error) {
@@ -113,6 +114,9 @@ func (f *Fake) handlePortsList(raw json.RawMessage) (any, error) {
 		if p.Group != nil && *p.Group != "" && !inGroup(row, *p.Group) {
 			continue
 		}
+		if p.Session != nil && *p.Session != "" && !inSession(row, *p.Session) {
+			continue
+		}
 		out = append(out, filterPort(row, include))
 	}
 	return rpc.PortsListResult{Ports: out}, nil
@@ -185,6 +189,15 @@ func resolvePort(rows []state.Port, sel rpc.Selector) (state.Port, error) {
 			fmt.Sprintf("port %d is bound to multiple addresses: %s", *sel.Port, strings.Join(addrs, ", ")),
 			fmt.Sprintf("pass a bind address (e.g. --ip %s)", addrs[0]))
 	}
+}
+
+// inSession is the daemon's session filter: the id, or a unique prefix of it
+// (contract §29), never the label.
+func inSession(p state.Port, id string) bool {
+	if p.Session == nil {
+		return false
+	}
+	return strings.HasPrefix(p.Session.ID, id)
 }
 
 func inGroup(p state.Port, group string) bool {

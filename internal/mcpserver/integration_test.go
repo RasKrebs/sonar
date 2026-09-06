@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,16 +38,144 @@ func TestRealDaemonToolsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tools/list: %v", err)
 	}
-	names := []string{}
+	names := map[string]bool{}
 	for _, tool := range res.Tools {
-		names = append(names, tool.Name)
-		t.Logf("%-13s readOnly=%v openWorld=%v", tool.Name,
+		names[tool.Name] = true
+		t.Logf("%-16s readOnly=%v openWorld=%v", tool.Name,
 			tool.Annotations.ReadOnlyHint, *tool.Annotations.OpenWorldHint)
 	}
-	for _, want := range []string{"list_ports", "inspect_port"} {
-		if !slices.Contains(names, want) {
-			t.Fatalf("tools/list = %v, want it to include %s", names, want)
+	for _, want := range []string{
+		"list_ports", "inspect_port", "wait_for_port", "next_free_port", "claim_port",
+		"tail_logs", "health_check", "dependency_graph", "port_history", "list_sessions",
+	} {
+		if !names[want] {
+			t.Errorf("tools/list is missing %s: %v", want, names)
 		}
+	}
+}
+
+// TestQueryToolsAgainstARealDaemon is step 2A.5's demo in executable form:
+// claim a port, bind it, wait for it, probe it, and read the machine's history
+// and sessions — all through the tools, against a real daemon.
+func TestQueryToolsAgainstARealDaemon(t *testing.T) {
+	e := newRealEnv(t)
+	session := e.connect(t)
+	ctx := context.Background()
+
+	callTool := func(name string, args map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: protocol error: %v\nstderr:\n%s", name, err, e.stderr())
+		}
+		if res.IsError {
+			t.Fatalf("%s failed: %s", name, textOf(res))
+		}
+		return res
+	}
+
+	// A port of our own, reserved the way an agent would reserve one.
+	var claim struct {
+		Key       string `json:"key"`
+		Ports     []int  `json:"ports"`
+		ExpiresAt string `json:"expires_at"`
+		Released  int    `json:"released"`
+	}
+	decodeStructured(t, callTool("claim_port", map[string]any{
+		"project": "mcp-itest", "worktree": "main",
+	}), &claim)
+	if len(claim.Ports) != 1 || claim.Key != "mcp-itest/main" {
+		t.Fatalf("claim_port = %+v, want one port under mcp-itest/main", claim)
+	}
+	t.Logf("claim_port → %s holds %v until %s", claim.Key, claim.Ports, claim.ExpiresAt)
+	port := claim.Ports[0]
+
+	// Claiming again is idempotent, which is the promise the annotation makes.
+	var again struct {
+		Ports []int `json:"ports"`
+	}
+	decodeStructured(t, callTool("claim_port", map[string]any{
+		"project": "mcp-itest", "worktree": "main",
+	}), &again)
+	if len(again.Ports) != 1 || again.Ports[0] != port {
+		t.Errorf("claiming again = %v, want the same port %d", again.Ports, port)
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Skipf("the claimed port %d could not be bound: %v", port, err)
+	}
+	defer ln.Close()
+
+	var wait struct {
+		Ready     []int `json:"ready"`
+		TimedOut  []int `json:"timed_out"`
+		ElapsedMs int64 `json:"elapsed_ms"`
+	}
+	decodeStructured(t, callTool("wait_for_port", map[string]any{
+		"ports": []any{port}, "timeout_seconds": 15,
+	}), &wait)
+	if len(wait.Ready) != 1 || wait.Ready[0] != port {
+		t.Fatalf("wait_for_port = %+v, want %d ready", wait, port)
+	}
+	t.Logf("wait_for_port → ready %v in %dms", wait.Ready, wait.ElapsedMs)
+
+	var health struct {
+		Status    string `json:"status"`
+		Code      int    `json:"code"`
+		LatencyMs int64  `json:"latency_ms"`
+		URL       string `json:"url"`
+		Reason    string `json:"reason"`
+	}
+	decodeStructured(t, callTool("health_check", map[string]any{"port": port}), &health)
+	switch health.Status {
+	case "ok", "fail", "unknown":
+	default:
+		t.Errorf("health_check status = %q, want ok, fail or unknown", health.Status)
+	}
+	if health.URL != fmt.Sprintf("http://localhost:%d/", port) {
+		t.Errorf("health_check url = %q", health.URL)
+	}
+	t.Logf("health_check → %s (%s)", health.Status, health.Reason)
+
+	// A free port is never the one we are holding.
+	var next struct {
+		Ports []int `json:"ports"`
+	}
+	decodeStructured(t, callTool("next_free_port", map[string]any{"start": port}), &next)
+	if len(next.Ports) != 1 || next.Ports[0] == port {
+		t.Errorf("next_free_port from %d = %v, want it to step over our claim", port, next.Ports)
+	}
+
+	// The read-only tools that need nothing of ours.
+	callTool("dependency_graph", map[string]any{})
+	var history struct {
+		Events []map[string]any `json:"events"`
+	}
+	decodeStructured(t, callTool("port_history", map[string]any{"since": "24h"}), &history)
+	t.Logf("port_history → %d events", len(history.Events))
+
+	var sessions struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	decodeStructured(t, callTool("list_sessions", map[string]any{"active_only": false}), &sessions)
+	t.Logf("list_sessions → %d sessions", len(sessions.Sessions))
+
+	// tail_logs against a process that writes nowhere is allowed to fail, but
+	// it must fail as a domain result the model can read.
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "tail_logs", Arguments: map[string]any{"port": port, "lines": 5},
+	})
+	if err != nil {
+		t.Fatalf("tail_logs: protocol error: %v", err)
+	}
+	t.Logf("tail_logs → isError=%v\n%s", res.IsError, clip(textOf(res), 200))
+
+	decodeStructured(t, callTool("claim_port", map[string]any{
+		"project": "mcp-itest", "worktree": "main", "release": true,
+	}), &claim)
+	if claim.Released < 1 {
+		t.Errorf("release freed %d ports, want at least one", claim.Released)
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 // ListPortsInput is the argument set of list_ports.
 type ListPortsInput struct {
 	Group       string `json:"group,omitempty" jsonschema:"Only ports in this group. A group is a project (a .sonar.yaml, a compose project or a git root); a sonar start name or run id also selects that run's ports."`
-	Session     string `json:"session,omitempty" jsonschema:"Only ports started by this agent session id, as reported in each port's session object."`
+	Session     string `json:"session,omitempty" jsonschema:"Only ports started by this agent session id, as reported in each port's session object. A unique prefix of the id works too; list_sessions shows the ids."`
 	Type        string `json:"type,omitempty" jsonschema:"Only ports of one kind: user (a process someone started), docker (a published container port) or system (a service the machine runs)."`
 	IncludeApps bool   `json:"include_apps,omitempty" jsonschema:"Include desktop applications that happen to listen (Chrome, Docker Desktop, Spotlight). Off by default because they are noise for development work."`
 	Stats       bool   `json:"stats,omitempty" jsonschema:"Collect CPU, memory, thread and uptime stats for each port. Costs an extra scan; leave off unless you were asked about resource use."`
@@ -77,8 +77,9 @@ func (s *Server) addReadTools() {
 	}, s.inspectPort)
 }
 
-// listPorts is ports.list, plus the session filter the daemon does not have
-// yet: the session lives on the port object, so it is filtered here.
+// listPorts is ports.list. Every filter is the daemon's own, including
+// session: it matches an id or a unique prefix of one (contract §29), which is
+// the daemon's rule and not a second one invented here.
 func (s *Server) listPorts(ctx context.Context, _ *mcp.CallToolRequest, in ListPortsInput) (*mcp.CallToolResult, any, error) {
 	params := rpc.PortsListParams{All: in.IncludeApps}
 	if in.Group != "" {
@@ -92,6 +93,9 @@ func (s *Server) listPorts(ctx context.Context, _ *mcp.CallToolRequest, in ListP
 			return errorResult(unsupportedValue("type", in.Type, "user", "docker", "system")), nil, nil
 		}
 	}
+	if in.Session != "" {
+		params.Session = &in.Session
+	}
 	if in.Stats {
 		params.Include = rpc.Include{"stats"}
 	}
@@ -99,9 +103,6 @@ func (s *Server) listPorts(ctx context.Context, _ *mcp.CallToolRequest, in ListP
 	var res rpc.PortsListResult
 	if err := s.daemon.Call(ctx, "ports.list", params, &res); err != nil {
 		return s.failed(err)
-	}
-	if in.Session != "" {
-		res.Ports = filterBySession(res.Ports, in.Session)
 	}
 	if res.Ports == nil {
 		res.Ports = []state.Port{}
@@ -156,23 +157,6 @@ func (s *Server) failed(err error) (*mcp.CallToolResult, any, error) {
 		return errorResult(domain), nil, nil
 	}
 	return nil, nil, err
-}
-
-// filterBySession keeps the ports a session started. The daemon carries the
-// session on the port (contract §5) but has no session filter of its own until
-// the sessions slice lands, so the match happens here: on the id, and on the
-// label, because that is what an agent is likely to have been told.
-func filterBySession(ports []state.Port, session string) []state.Port {
-	out := make([]state.Port, 0, len(ports))
-	for _, p := range ports {
-		if p.Session == nil {
-			continue
-		}
-		if p.Session.ID == session || (p.Session.Label != "" && p.Session.Label == session) {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func describeMismatch(wantPort, pid, gotPort int) string {

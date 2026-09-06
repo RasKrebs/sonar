@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/raskrebs/sonar/internal/daemon/client"
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/display"
-	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -215,40 +213,12 @@ func claimTTL() (time.Duration, error) {
 
 // claimIdentity derives the project and worktree from the current directory:
 // the git checkout's name, and the worktree name for a linked worktree (spec 2
-// §4). A directory outside any repository claims under its own name.
+// §4). The flags win over both. The derivation itself lives in internal/claims
+// so `sonar claim` and the `claim_port` MCP tool compute the same key.
 func claimIdentity() (project, worktree string) {
-	if claimProject != "" || claimWorktree != "" {
-		project, worktree = claimProject, claimWorktree
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = ""
 	}
-	root, wt, ok := groups.Find(cwd)
-	switch {
-	case !ok:
-		if project == "" {
-			project = filepath.Base(cwd)
-		}
-	case wt != "":
-		// groups.Find spells a linked worktree "<repo>@<name>".
-		repo, name, _ := strings.Cut(wt, "@")
-		if project == "" {
-			project = repo
-		}
-		if worktree == "" {
-			worktree = name
-		}
-	default:
-		if project == "" {
-			project = filepath.Base(root)
-		}
-	}
-	if project == "" {
-		project = "sonar"
-	}
-	if worktree == "" {
-		worktree = claims.DefaultWorktree
-	}
-	return project, worktree
+	return claims.Identity(cwd, claimProject, claimWorktree)
 }

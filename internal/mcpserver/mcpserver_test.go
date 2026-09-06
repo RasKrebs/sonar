@@ -120,8 +120,8 @@ func TestToolsListAdvertisesTheReadTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		byName[tool.Name] = tool
 	}
-	// The tool set is the sum of the tools_*.go files, so this asserts what the
-	// read tools promise rather than how many tools the server has in total.
+	// Other slices add their own tools to the same server, so this asserts
+	// what the read tools promise rather than how many tools exist.
 	for _, name := range []string{"list_ports", "inspect_port"} {
 		tool, ok := byName[name]
 		if !ok {
@@ -185,6 +185,7 @@ func TestListPortsFilters(t *testing.T) {
 		{"type system", map[string]any{"type": "system"}, []int{22}},
 		{"include apps", map[string]any{"include_apps": true}, []int{3000, 5173, 5432, 8080, 22, 7000}},
 		{"session", map[string]any{"session": "claude-code:9f2c"}, []int{3000}},
+		{"session prefix", map[string]any{"session": "claude-code"}, []int{3000}},
 		{"unknown session", map[string]any{"session": "codex:nope"}, []int{}},
 	}
 	for _, tt := range tests {

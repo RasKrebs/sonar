@@ -39,11 +39,14 @@ type Fake struct {
 	mu       sync.Mutex
 	fixture  Fixture
 	handlers map[string]Handler
-	conns    map[*conn]struct{}
-	ln       net.Listener
-	addr     string
-	seq      uint64
-	closed   bool
+	// streamHandlers holds the methods answered with a subscription id and a
+	// run of chunks (see stream.go).
+	streamHandlers map[string]StreamHandler
+	conns          map[*conn]struct{}
+	ln             net.Listener
+	addr           string
+	seq            uint64
+	closed         bool
 
 	// Calls counts every request the fake has answered, by method. Tests use
 	// it to assert that a read was served once, not once per retry.
@@ -55,21 +58,24 @@ type Fake struct {
 // New builds a fake serving fixture. Call Start to bind an address.
 func New(fixture Fixture) *Fake {
 	f := &Fake{
-		fixture:  fixture,
-		handlers: map[string]Handler{},
-		conns:    map[*conn]struct{}{},
-		seq:      1,
+		fixture:        fixture,
+		handlers:       map[string]Handler{},
+		streamHandlers: map[string]StreamHandler{},
+		conns:          map[*conn]struct{}{},
+		seq:            1,
 	}
 	f.registerCore()
 	return f
 }
 
 // Handle registers or replaces the handler for a method. Later slices add
-// their own methods this way.
+// their own methods this way. Replacing a streaming method makes it unary
+// again, so a test can stub one out with a plain reply.
 func (f *Fake) Handle(method string, h Handler) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handlers[method] = h
+	delete(f.streamHandlers, method)
 }
 
 // ResetHandlers restores the built-in method set, dropping anything a test
@@ -77,6 +83,7 @@ func (f *Fake) Handle(method string, h Handler) {
 func (f *Fake) ResetHandlers() {
 	f.mu.Lock()
 	f.handlers = map[string]Handler{}
+	f.streamHandlers = map[string]StreamHandler{}
 	f.mu.Unlock()
 	f.registerCore()
 }
