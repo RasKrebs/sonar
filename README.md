@@ -613,6 +613,19 @@ sonar daemon status
 - Linux (uses `ss`)
 - Windows (uses `netstat`)
 
+Grouping needs each process's working directory, and every platform now has
+one: `/proc` on Linux, `lsof` on macOS, and on Windows a read of the process's
+own PEB. So git-root groups, `project_root` and cwd-based names work the same
+everywhere, and `sonar init` can propose a `.sonar.yaml` from what is listening
+on any of the three.
+
+The one gap is a 32-bit `sonar.exe` on 64-bit Windows: it cannot read a 64-bit
+process's memory, so those ports come back without a working directory and fall
+out of their git-root group. Use the 64-bit build — it reads 64-bit and 32-bit
+processes alike. Elsewhere, a port whose process denies access (a service
+running as another user, a protected system process) is simply left without a
+working directory; the rest of the scan is unaffected.
+
 ## Contributors
 
 Thanks to everyone who has contributed to sonar!

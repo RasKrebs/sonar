@@ -254,10 +254,10 @@ func keys(m map[int]bool) []int {
 //
 // It runs in the project directory on purpose: `sonar groups` is a direct-scan
 // command, and the only directories it indexes are the caller's own and the
-// working directories of the processes it scanned. The second half does not
-// exist on Windows — there is no per-process cwd the scanner can read — so
-// asking from somewhere else is asking a question the command cannot answer
-// there.
+// working directories of the processes it scanned. The second half is best
+// effort — a process may refuse the scanner the handle it needs — so asking
+// from somewhere else is asking a question the command may not be able to
+// answer.
 func waitForGroupStatus(t *testing.T, e *env, dir, name, want string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
