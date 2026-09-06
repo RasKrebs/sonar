@@ -76,11 +76,21 @@ type testHarness struct {
 // A harness that opens a database must be built *after* the t.TempDir() that
 // holds it: cleanups run last-registered-first, and the harness has to stop
 // before the directory it writes into is removed.
-func newHarness(t *testing.T, ctx context.Context) *testHarness {
+// tune lets a test adjust the scanner options the harness builds, before the
+// loop is constructed. The stats tick is what it is for: most tests only need
+// it to exist, and paying the production 1 s cadence for each of them makes
+// the suite slower without testing anything, so they turn it down.
+type tune func(*scanner.Options)
+
+// fastStats is that knob: a cadence short enough that a test can wait for a
+// tick without waiting a second for it.
+func fastStats(o *scanner.Options) { o.StatsInterval = 50 * time.Millisecond }
+
+func newHarness(t *testing.T, ctx context.Context, tunes ...tune) *testHarness {
 	t.Helper()
 	h := &testHarness{t: t, loopDone: make(chan struct{})}
 	h.probe = refusedProbe
-	h.loop = scanner.New(scanner.Options{
+	opts := scanner.Options{
 		DaemonVersion: "test",
 		Scan: func(scanner.Include) ([]ports.ListeningPort, error) {
 			h.mu.Lock()
@@ -109,7 +119,11 @@ func newHarness(t *testing.T, ctx context.Context) *testHarness {
 		// long as a test keeps a subscription open.
 		HostStats:   h.hostStats,
 		SampleStats: h.sampleStats,
-	})
+	}
+	for _, tune := range tunes {
+		tune(&opts)
+	}
+	h.loop = scanner.New(opts)
 	h.srv = New(Options{Socket: "/test/sonar.sock", Version: "test", Scanner: h.loop})
 
 	runCtx, stop := context.WithCancel(ctx)

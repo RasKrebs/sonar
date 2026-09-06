@@ -77,7 +77,7 @@ func TestNonStatsSubscriberGetsHostRowsButNoStats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := newHarness(t, ctx)
+	h := newHarness(t, ctx, fastStats)
 	h.setRows(statsRows()...)
 	h.statsMove.Store(true)
 
@@ -115,7 +115,7 @@ func TestStatsTickStaysParkedForRPCReads(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := newHarness(t, ctx)
+	h := newHarness(t, ctx, fastStats)
 	h.setRows(statsRows()...)
 	h.statsMove.Store(true)
 
@@ -123,7 +123,8 @@ func TestStatsTickStaysParkedForRPCReads(t *testing.T) {
 	if e := c.call("state.snapshot", rpc.StateSnapshotParams{Include: rpc.Include{"stats"}}, nil); e != nil {
 		t.Fatalf("state.snapshot: %v", e)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	// Many cadences' worth of chances to fire.
+	time.Sleep(500 * time.Millisecond)
 	if got := h.sampleN.Load(); got != 0 {
 		t.Errorf("the stats sampler ran %d times for an unsubscribed daemon", got)
 	}
@@ -166,7 +167,7 @@ func TestStatsTickBetweenARemoteChangeAndItsPublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h := newHarness(t, ctx)
+	h := newHarness(t, ctx, fastStats)
 	h.setRows(statsRows()...)
 	h.statsMove.Store(true)
 
