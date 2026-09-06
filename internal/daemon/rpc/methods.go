@@ -357,9 +357,14 @@ type ConfigProblem struct {
 	Error string `json:"error"`
 }
 
+// GroupsInitParams asks for a proposed `.sonar.yaml` for the checkout at
+// RootDir. Write is the contract's opt-in to actually writing it, so the
+// default is a preview; Force is the wire form of `sonar init --force` and is
+// the only way past an existing file (contract §4, §16).
 type GroupsInitParams struct {
 	RootDir string `json:"root_dir"`
 	Write   bool   `json:"write,omitempty"`
+	Force   bool   `json:"force,omitempty"`
 }
 
 type GroupsInitResult struct {
