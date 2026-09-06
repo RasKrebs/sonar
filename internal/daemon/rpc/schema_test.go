@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/raskrebs/sonar/internal/state"
@@ -112,10 +113,17 @@ func TestCheckedInSchemaIsUpToDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v (run `go generate ./...`)", err)
 	}
-	if string(onDisk) != string(Marshal()) {
+	if unixEOL(string(onDisk)) != unixEOL(string(Marshal())) {
 		t.Fatalf("%s is stale; run `go generate ./...`", path)
 	}
 }
+
+// unixEOL folds CRLF to LF. .gitattributes pins the checked-in schema to LF so
+// the file a Windows CI checkout compares is the file `go generate` wrote, but
+// a developer's checkout made before that (or with core.autocrlf forced on)
+// still has CRLF on disk, and the schema's content is what this test is about,
+// not its line endings.
+func unixEOL(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 // TestSchemaEnumsMatchGoEnums guards against the Go enum constants and the
 // struct-tag enums in the generated schema drifting apart.

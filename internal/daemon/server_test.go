@@ -25,15 +25,22 @@ type testHarness struct {
 	srv  *Server
 	loop *scanner.Loop
 
+	stopLoop context.CancelFunc
+	loopDone chan struct{}
+
 	mu   sync.Mutex
 	rows []ports.ListeningPort
 }
 
 // newHarness builds a server whose scan loop is already running, so a change to
 // the fake scan result reaches subscribers the way it does in production.
+//
+// A harness that opens a database must be built *after* the t.TempDir() that
+// holds it: cleanups run last-registered-first, and the harness has to stop
+// before the directory it writes into is removed.
 func newHarness(t *testing.T, ctx context.Context) *testHarness {
 	t.Helper()
-	h := &testHarness{t: t}
+	h := &testHarness{t: t, loopDone: make(chan struct{})}
 	h.loop = scanner.New(scanner.Options{
 		DaemonVersion: "test",
 		Scan: func(scanner.Include) ([]ports.ListeningPort, error) {
@@ -43,8 +50,33 @@ func newHarness(t *testing.T, ctx context.Context) *testHarness {
 		},
 	})
 	h.srv = New(Options{Socket: "/test/sonar.sock", Version: "test", Scanner: h.loop})
-	go h.loop.Run(ctx)
+
+	runCtx, stop := context.WithCancel(ctx)
+	h.stopLoop = stop
+	go func() {
+		defer close(h.loopDone)
+		h.loop.Run(runCtx)
+	}()
+	t.Cleanup(h.shutdown)
 	return h
+}
+
+// shutdown stops everything the harness started, in order, and returns only
+// once it has stopped.
+//
+// Cancelling the test's context asks the loop to stop; it does not wait for it
+// to have stopped, and a scan already in flight goes on publishing — which
+// records history through the store, into the temp directory t.TempDir is
+// removing at that very moment. That race failed as "TempDir RemoveAll
+// cleanup: directory not empty", pointing at a SQLite -wal file recreated
+// behind the delete. Connections first (their handlers write too), then the
+// loop, then the database.
+func (h *testHarness) shutdown() {
+	h.srv.closeAllConns("test over")
+	h.srv.wg.Wait()
+	h.stopLoop()
+	<-h.loopDone
+	h.srv.closeStore()
 }
 
 // setRows replaces what the fake scanner returns.

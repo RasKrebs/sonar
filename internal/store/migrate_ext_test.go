@@ -12,6 +12,14 @@ import (
 )
 
 func TestReservedMigrationFromAnotherPackage(t *testing.T) {
+	// The migration registry is global to the process and refuses a version
+	// twice — which is the last thing this test asserts. A second run in the
+	// same binary (`go test -count=2`) would therefore panic on the very first
+	// registration, so it stands aside once the slot is filled.
+	if store.LatestVersion() >= store.VersionTunnels {
+		t.Skip("migration 003 is already registered in this process")
+	}
+
 	before := store.LatestVersion()
 	if before < store.VersionIndexes {
 		t.Fatalf("LatestVersion = %d before registering, want at least %d", before, store.VersionIndexes)

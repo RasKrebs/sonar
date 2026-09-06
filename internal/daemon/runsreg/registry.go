@@ -153,17 +153,21 @@ func (r *Registry) Prune() {
 // Run implements groups.Registry: it attributes a listening port to the run
 // that owns it by walking the port's PPID ancestry, so `npm run dev` -> vite ->
 // esbuild all resolve to the run that started them.
-func (r *Registry) Run(p state.Port) (group, name string, ok bool) {
+//
+// It answers with the whole run because the resolver stamps it onto the row:
+// this registry, not the runs.json mirror the scanner reads, is what a daemon
+// knows about its own runs, and it knows it the moment `runs.register` returns.
+func (r *Registry) Run(p state.Port) (state.Run, bool) {
 	if rec, found := r.ancestor(p.PID, p.PPID); found {
-		return rec.Group, rec.Name, rec.Group != "" || rec.Name != ""
+		return state.Run{ID: rec.ID, Group: rec.Group, Name: rec.Name, RootPID: rec.PID}, true
 	}
 	// The scanner already walked the ancestry against the mirrored file while
 	// enriching this port; trust that rather than walking a process table that
 	// has moved on since.
 	if p.Run != nil && (p.Run.Group != "" || p.Run.Name != "") {
-		return p.Run.Group, p.Run.Name, true
+		return *p.Run, true
 	}
-	return "", "", false
+	return state.Run{}, false
 }
 
 // ancestor walks up from pid looking for a registered run. hintPPID is the

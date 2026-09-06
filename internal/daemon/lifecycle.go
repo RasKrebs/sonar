@@ -44,9 +44,9 @@ type Runtime struct {
 // (group source `start`); internal/daemon/runsreg installs the implementation
 // from its own OnStart hook, so this package never imports it (contract §8).
 type RunRegistry interface {
-	// Run reports the group and name of the run that owns a port, matching
-	// groups.Registry so the resolver can take it as-is.
-	Run(p state.Port) (group, name string, ok bool)
+	// Run reports the run that owns a port, matching groups.Registry so the
+	// resolver can take it as-is.
+	Run(p state.Port) (run state.Run, ok bool)
 	// Prune drops runs whose process is gone.
 	Prune()
 }
@@ -55,8 +55,8 @@ type RunRegistry interface {
 // have to nil-check.
 type noRuns struct{}
 
-func (noRuns) Run(state.Port) (string, string, bool) { return "", "", false }
-func (noRuns) Prune()                                {}
+func (noRuns) Run(state.Port) (state.Run, bool) { return state.Run{}, false }
+func (noRuns) Prune()                           {}
 
 // SetRuns installs the run registry. Called once, from an OnStart hook.
 func (r *Runtime) SetRuns(reg RunRegistry) {

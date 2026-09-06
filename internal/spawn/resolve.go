@@ -3,6 +3,7 @@ package spawn
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/raskrebs/sonar/internal/groups"
@@ -93,11 +94,21 @@ func matchService(cfg *groups.Config, cwd string, argv []string) (string, bool) 
 }
 
 // SplitCmd turns a `.sonar.yaml` `cmd:` string into argv with shell-style
-// quoting and no shell execution (contract §4). Backslash escapes are honoured
-// outside single quotes only, so a Windows path in double quotes survives.
+// quoting and no shell execution (contract §4).
+//
+// Backslashes follow the host's convention, because a `cmd:` is written for
+// the machine it runs on. On Unix a backslash escapes the character after it
+// (outside single quotes), so `/tmp/a\ b` is one argument. On Windows a
+// backslash is a path separator: `C:\srv\app.exe` has to survive verbatim, so
+// a backslash is literal except before a quote or another backslash inside
+// double quotes, which is how CommandLineToArgvW reads a command line.
 func SplitCmd(s string) []string { return splitCmd(s) }
 
-func splitCmd(s string) []string {
+func splitCmd(s string) []string { return splitCmdFor(s, runtime.GOOS == "windows") }
+
+// splitCmdFor is SplitCmd with the platform injected, so both conventions can
+// be tested on one host.
+func splitCmdFor(s string, windows bool) []string {
 	var (
 		out   []string
 		cur   strings.Builder
@@ -118,7 +129,7 @@ func splitCmd(s string) []string {
 			quote, have = c, true
 		case quote != 0 && c == quote:
 			quote = 0
-		case quote != '\'' && c == '\\' && i+1 < len(runes):
+		case c == '\\' && i+1 < len(runes) && escapesNext(quote, runes[i+1], windows):
 			i++
 			cur.WriteRune(runes[i])
 			have = true
@@ -131,4 +142,20 @@ func splitCmd(s string) []string {
 		out = append(out, cur.String())
 	}
 	return out
+}
+
+// escapesNext reports whether a backslash before next is an escape rather than
+// a character of its own, inside the given quote (0 for unquoted).
+func escapesNext(quote, next rune, windows bool) bool {
+	if quote == '\'' {
+		// Single quotes are literal on every platform.
+		return false
+	}
+	if !windows {
+		return true
+	}
+	// Windows: only a quote, or the backslash guarding one, is escapable, and
+	// only inside double quotes. Everywhere else a backslash is a path
+	// separator and stays one.
+	return quote == '"' && (next == '"' || next == '\\')
 }

@@ -1,0 +1,8 @@
+# The checked-in protocol schema is compared byte for byte against what
+# `go generate ./...` writes, so it has to reach every checkout with the line
+# endings it was generated with — a Windows checkout with core.autocrlf=true
+# would otherwise fail the freshness test on line endings alone.
+docs/schema/*.json text eol=lf
+
+# Go source is gofmt'd with LF and `gofmt -l` is a CI gate.
+*.go text eol=lf

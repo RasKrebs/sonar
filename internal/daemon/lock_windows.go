@@ -13,14 +13,33 @@ import (
 // turn it into ErrAlreadyRunning.
 var errLockBusy = errors.New("lock held by another process")
 
-// lockWholeFile locks a range large enough to cover any lock file we write.
-const lockLow, lockHigh = ^uint32(0), ^uint32(0)
+// The lock is a single byte at offset 1<<62, past any byte the lock file will
+// ever hold.
+//
+// LockFileEx makes the range it locks unreadable to every other process, so
+// locking the whole file hid the one thing the file exists to publish: with a
+// daemon running, LockHolderPID and ErrAlreadyRunning.PID both came back 0 and
+// os.ReadFile failed with "another process has locked a portion of the file".
+// A range that cannot overlap the pid keeps the semantics we want from flock —
+// the lock lives on the open handle and dies with it — and leaves offset 0
+// readable to anyone who wants to know whose daemon is running.
+const (
+	lockOffsetLow  = 0
+	lockOffsetHigh = 1 << 30 // (1<<30)<<32 == byte 1<<62 of the file
+	lockBytesLow   = 1
+	lockBytesHigh  = 0
+)
+
+// lockRange is the region LockFileEx and UnlockFileEx both address. The offset
+// travels in the OVERLAPPED, the length in the byte-count arguments.
+func lockRange() *windows.Overlapped {
+	return &windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
+}
 
 func lockFile(f *os.File) error {
-	var overlapped windows.Overlapped
 	err := windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
-		0, lockLow, lockHigh, &overlapped)
+		0, lockBytesLow, lockBytesHigh, lockRange())
 	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
 		return errLockBusy
 	}
@@ -28,6 +47,25 @@ func lockFile(f *os.File) error {
 }
 
 func unlockFile(f *os.File) error {
-	var overlapped windows.Overlapped
-	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, lockLow, lockHigh, &overlapped)
+	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0,
+		lockBytesLow, lockBytesHigh, lockRange())
+}
+
+// isLockedOpenError reports whether opening the lock file failed because
+// another process has it locked or open without sharing. Windows refuses the
+// open where Unix would refuse only the lock, and a restart has to read that
+// as "still held, try again" rather than as a broken lock directory.
+func isLockedOpenError(err error) bool {
+	return errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||
+		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+}
+
+// markNotInheritable clears the handle's inherit flag, so a child started by
+// the daemon cannot keep the lock (or the lock file) alive after the daemon
+// exits. Go already opens files with O_CLOEXEC on Windows; saying it again
+// here costs one syscall and makes the requirement explicit, because a
+// spawned child holding this handle is exactly how a daemon that has exited
+// goes on looking like it is running.
+func markNotInheritable(f *os.File) {
+	_ = windows.SetHandleInformation(windows.Handle(f.Fd()), windows.HANDLE_FLAG_INHERIT, 0)
 }

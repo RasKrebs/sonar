@@ -59,14 +59,18 @@ cd "$(cd "$project" && pwd -P)"
 # collected, and kept only if one of its lines is the `# check` marker.
 blocks=$work/blocks
 mkdir -p "$blocks"
-awk -v out="$blocks" '
-  /^```sh$/ && !inblock { inblock = 1; n = 0; checked = 0; next }
+awk -v out="$blocks" -v src="$readme" '
+  /^```sh$/ && !inblock { inblock = 1; n = 0; checked = 0; first = NR + 1; next }
   /^```/ && inblock {
     if (checked) {
       count++
       file = sprintf("%s/%03d.sh", out, count)
       for (i = 1; i <= n; i++) print body[i] > file
       close(file)
+      # Where the block lives, so a failure in CI names the lines to edit.
+      where = sprintf("%s/%03d.where", out, count)
+      printf "%s:%d-%d\n", src, first, NR - 1 > where
+      close(where)
     }
     inblock = 0
     next
@@ -90,8 +94,12 @@ for file in "${files[@]}"; do
   if output=$(bash -euo pipefail "$file" 2>&1); then
     printf 'ok   %s\n' "$name"
   else
+    status=$?
     failed=$((failed + 1))
-    printf 'FAIL %s\n' "$name"
+    printf 'FAIL %s (exit %d)\n' "$name" "$status"
+    # The block itself first, then what it printed: a CI log is the only thing
+    # anyone reads after a failure, and it has to be diagnosable on its own.
+    printf '     --- %s ---\n' "$(cat "${file%.sh}.where")"
     sed 's/^/     | /' "$file"
     printf '     --- output ---\n'
     printf '%s\n' "$output" | sed 's/^/     | /'

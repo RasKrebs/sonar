@@ -76,13 +76,48 @@ func TestRunAttributesAPortByItsPPIDAncestry(t *testing.T) {
 	// sonar start (100) -> npm (200) -> node (300) -> esbuild (400)
 	r.Parents = func() map[int]int { return map[int]int{400: 300, 300: 200, 200: 100} }
 
-	group, name, ok := r.Run(state.Port{PID: 400, PPID: 300})
-	if !ok || group != "itest" || name != "web" {
-		t.Fatalf("Run(descendant) = %q/%q/%v, want itest/web/true", group, name, ok)
+	run, ok := r.Run(state.Port{PID: 400, PPID: 300})
+	if !ok || run.Group != "itest" || run.Name != "web" || run.RootPID != 100 {
+		t.Fatalf("Run(descendant) = %+v/%v, want itest/web rooted at 100", run, ok)
 	}
 
-	if _, _, ok := r.Run(state.Port{PID: 777, PPID: 1}); ok {
+	if _, ok := r.Run(state.Port{PID: 777, PPID: 1}); ok {
 		t.Fatal("an unrelated listener was attributed to a run")
+	}
+}
+
+// TestRunAttributesTheLinuxScannerShape is the shape a Linux scan hands the
+// resolver: `ss -tlnp` reports the listening pid and nothing else, so the row
+// arrives with PPID 0 and no run of its own. Attribution then has only the
+// process table to work with, and it has to reach the `sonar start` that owns
+// the listener through it.
+func TestRunAttributesTheLinuxScannerShape(t *testing.T) {
+	r := testRegistry(100)
+	r.Register(Record{ID: "a", PID: 100, Group: "itest", Name: "web"})
+	// sonar start (100) -> the listener it spawned (300). ss gave no ppid.
+	r.Parents = func() map[int]int { return map[int]int{300: 100, 100: 42} }
+
+	run, ok := r.Run(state.Port{PID: 300, PPID: 0})
+	if !ok {
+		t.Fatal("a listener spawned by a run was not attributed to it")
+	}
+	if run.ID != "a" || run.Group != "itest" || run.Name != "web" || run.RootPID != 100 {
+		t.Fatalf("Run = %+v, want a/itest/web rooted at 100", run)
+	}
+}
+
+// TestRunAttributesTheRegisteredPIDItself covers `sonar start` in the
+// foreground: the run is registered under the pid of the child it spawned, and
+// that child is the process holding the socket, so no walk is needed and the
+// answer must not depend on a process table being readable at all.
+func TestRunAttributesTheRegisteredPIDItself(t *testing.T) {
+	r := testRegistry(300)
+	r.Register(Record{ID: "a", PID: 300, Group: "itest", Name: "web"})
+	r.Parents = func() map[int]int { t.Fatal("the process table should not be needed"); return nil }
+
+	run, ok := r.Run(state.Port{PID: 300})
+	if !ok || run.ID != "a" || run.Name != "web" || run.RootPID != 300 {
+		t.Fatalf("Run = %+v/%v, want the registered run", run, ok)
 	}
 }
 
@@ -91,19 +126,19 @@ func TestRunUsesTheDirectParentBeforeTheProcessTable(t *testing.T) {
 	r.Register(Record{ID: "a", PID: 100, Group: "itest", Name: "web"})
 	r.Parents = func() map[int]int { t.Fatal("the process table should not be needed"); return nil }
 
-	if group, _, ok := r.Run(state.Port{PID: 200, PPID: 100}); !ok || group != "itest" {
-		t.Fatalf("Run(child) = %q/%v", group, ok)
+	if run, ok := r.Run(state.Port{PID: 200, PPID: 100}); !ok || run.Group != "itest" {
+		t.Fatalf("Run(child) = %+v/%v", run, ok)
 	}
 }
 
 func TestRunFallsBackToTheScannersOwnAttribution(t *testing.T) {
 	r := testRegistry()
-	group, name, ok := r.Run(state.Port{
+	run, ok := r.Run(state.Port{
 		PID: 400,
 		Run: &state.Run{ID: "x", Group: "from-file", Name: "web", RootPID: 100},
 	})
-	if !ok || group != "from-file" || name != "web" {
-		t.Fatalf("Run = %q/%q/%v", group, name, ok)
+	if !ok || run.Group != "from-file" || run.Name != "web" {
+		t.Fatalf("Run = %+v/%v", run, ok)
 	}
 }
 

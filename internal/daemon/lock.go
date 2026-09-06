@@ -32,9 +32,13 @@ func IsAlreadyRunning(err error) bool {
 	return errors.As(err, &e)
 }
 
-// Lock is the single-instance lock. It is an advisory whole-file lock (flock on
-// Unix, LockFileEx on Windows) on <socket dir>/daemon.lock whose contents are
-// the holder's pid, so a second `sonar serve` can name the process it lost to.
+// Lock is the single-instance lock: an advisory lock (flock on Unix,
+// LockFileEx on Windows) on <socket dir>/daemon.lock, whose contents are the
+// holder's pid so a second `sonar serve` can name the process it lost to.
+//
+// Unix locks the whole file; Windows locks one byte far past the end of it,
+// because a Windows lock also blocks reads of the range it covers and the pid
+// has to stay readable while the lock is held (see lock_windows.go).
 type Lock struct {
 	path string
 	f    *os.File
@@ -48,8 +52,22 @@ func AcquireLock(path string) (*Lock, error) {
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		if isLockedOpenError(err) {
+			// Windows can refuse the open itself while another process has the
+			// file locked or opened without sharing, where Unix would let us
+			// open it and only refuse the lock. It is the same answer —
+			// somebody else has it — so it gets the same error, and callers
+			// that retry (WaitForLockRelease) keep retrying.
+			return nil, &ErrAlreadyRunning{PID: LockHolderPID(path), Path: path}
+		}
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
+	// A daemon spawns children (`sonar start`, `sonar up`, autostart). None of
+	// them may inherit the lock handle: an inherited handle keeps the lock —
+	// and, on Windows, the file itself — alive after the daemon that took it
+	// has exited.
+	markNotInheritable(f)
+
 	if err := lockFile(f); err != nil {
 		pid := readLockPID(f)
 		f.Close()
@@ -95,8 +113,20 @@ func (l *Lock) Path() string { return l.path }
 // The lock is taken and immediately released, which is the only honest test
 // that it is free. A lock whose recorded holder is gone is also treated as
 // free, so a stale lock file cannot make restart hang for the whole timeout.
+//
+// On Windows the wait has to survive one more failure mode: opening a file the
+// outgoing daemon still holds fails outright (ERROR_LOCK_VIOLATION or
+// ERROR_SHARING_VIOLATION) rather than blocking. AcquireLock reports those as
+// ErrAlreadyRunning, so they are retried here instead of aborting the restart.
 func WaitForLockRelease(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	// Asking whether the holder is alive costs a `tasklist` process on Windows,
+	// so it is rate-limited well below the poll: the lock itself is the fast
+	// answer, and a recorded holder that is already gone can wait half a second
+	// to be noticed.
+	const livenessEvery = 500 * time.Millisecond
+	checkLivenessAt := time.Now()
+
 	var last error
 	for {
 		lock, err := AcquireLock(path)
@@ -111,8 +141,11 @@ func WaitForLockRelease(path string, timeout time.Duration) error {
 		}
 		last = err
 		var already *ErrAlreadyRunning
-		if errors.As(err, &already) && already.PID > 0 && !runs.PIDAlive(already.PID) {
-			return nil
+		if errors.As(err, &already) && already.PID > 0 && !time.Now().Before(checkLivenessAt) {
+			checkLivenessAt = time.Now().Add(livenessEvery)
+			if !runs.PIDAlive(already.PID) {
+				return nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("the previous daemon still holds %s after %s: %w", path, timeout, last)

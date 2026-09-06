@@ -9,6 +9,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -228,10 +229,28 @@ func isCorruption(err error) bool {
 		strings.Contains(msg, "malformed database schema")
 }
 
-// Close releases the database.
+// Close releases the database, leaving one file behind rather than three.
+//
+// WAL keeps a `-wal` and a `-shm` beside the database, and they are written
+// again by whichever pooled connection closes last — after Close has returned,
+// as far as the caller can tell. A daemon that has stopped, or a test whose
+// temp directory is being removed, has no way to wait for that: the removal
+// fails with "directory not empty" against a `-wal` recreated behind it.
+// Checkpointing and leaving WAL mode deletes both sidecars while we still hold
+// the connection that owns them. A busy database refuses the switch; that is
+// the state we were already in, so the error is not worth reporting.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
+	}
+	// Drop the idle pool: journal_mode can only change when one connection is
+	// left to change it.
+	s.db.SetMaxIdleConns(0)
+	s.db.SetMaxOpenConns(1)
+	if conn, err := s.db.Conn(context.Background()); err == nil {
+		_, _ = conn.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+		_, _ = conn.ExecContext(context.Background(), `PRAGMA journal_mode(DELETE)`)
+		_ = conn.Close()
 	}
 	return s.db.Close()
 }

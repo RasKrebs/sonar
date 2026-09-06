@@ -23,3 +23,12 @@ func lockFile(f *os.File) error {
 func unlockFile(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
+
+// isLockedOpenError reports whether opening the lock file failed because
+// somebody else holds it. Unix always opens the file and refuses the lock
+// instead, so nothing lands here.
+func isLockedOpenError(error) bool { return false }
+
+// markNotInheritable is a no-op on Unix: Go opens every file with O_CLOEXEC,
+// so no child of a fork/exec inherits the lock's descriptor.
+func markNotInheritable(*os.File) {}

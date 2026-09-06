@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -89,9 +90,16 @@ func (errNoHome) Error() string { return "no home" }
 // socket on a per-boot tmpfs takes its lock with it, and that a named pipe
 // (which has no directory) falls back to the config directory.
 func TestLockPathFollowsSocket(t *testing.T) {
-	if got, want := lockPathFor("/run/user/1000/sonar/daemon.sock"),
-		"/run/user/1000/sonar/daemon.lock"; got != want {
-		t.Errorf("lockPathFor(unix socket) = %q, want %q", got, want)
+	// The "beside the socket" branch is a unix-socket branch: on Windows the
+	// address is always a named pipe (the default, or a SONAR_SOCKET pointing
+	// at another pipe), which has no directory and takes the config-dir branch
+	// below. Asserting a unix path there would only assert what filepath does
+	// to slashes.
+	if runtime.GOOS != "windows" {
+		if got, want := lockPathFor("/run/user/1000/sonar/daemon.sock"),
+			"/run/user/1000/sonar/daemon.lock"; got != want {
+			t.Errorf("lockPathFor(unix socket) = %q, want %q", got, want)
+		}
 	}
 	got := lockPathFor(WindowsPipe)
 	if want := filepath.Join(ConfigDir(), "daemon.lock"); got != want {

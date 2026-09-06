@@ -21,32 +21,36 @@ type NoPins struct{}
 // Group never matches.
 func (NoPins) Group(state.Port) (string, bool) { return "", false }
 
-// Registry attributes a port to a process sonar started. The scanner has
-// already walked the PPID ancestry against `runs.json`, so the default
-// implementation just reads what it recorded.
+// Registry attributes a port to a process sonar started. It answers with the
+// whole run, not just its group, because `run`, `display_name` and
+// `group_source: start` all have to come out of one lookup: a daemon that
+// resolved the group from its live registry but the run from the runs.json
+// mirror could publish `group_source: "start"` next to a null `run`.
 type Registry interface {
-	// Run returns the group and name of the run that owns this port.
-	Run(p state.Port) (group, name string, ok bool)
+	// Run returns the run that owns this port.
+	Run(p state.Port) (run state.Run, ok bool)
 }
 
-// PortRuns reads the run attribution the scanner put on the port itself.
+// PortRuns reads the run attribution the scanner put on the port itself. It is
+// the direct-scan path: no daemon, so `runs.json` is the only registry there is.
 type PortRuns struct{}
 
-// Run returns the run's group and name. Until `sonar start` records a group
-// (step 1A.5, contract §11.3) run.group is empty, so this reports ok only for
-// the name; the resolver then falls through to the file and git-root rules.
-func (PortRuns) Run(p state.Port) (group, name string, ok bool) {
+// Run returns the run the scanner already attributed. Until `sonar start`
+// records a group (step 1A.5, contract §11.3) run.group is empty, so this
+// reports ok with only the name; the resolver then falls through to the file
+// and git-root rules.
+func (PortRuns) Run(p state.Port) (state.Run, bool) {
 	if p.Run == nil {
-		return "", "", false
+		return state.Run{}, false
 	}
-	return p.Run.Group, p.Run.Name, true
+	return *p.Run, true
 }
 
 // NoRuns is the empty run registry.
 type NoRuns struct{}
 
 // Run never matches.
-func (NoRuns) Run(state.Port) (string, string, bool) { return "", "", false }
+func (NoRuns) Run(state.Port) (state.Run, bool) { return state.Run{}, false }
 
 // MatchKeys returns the keys a rename or a pin can be stored under for this
 // port, most stable first. The store step matches a stored key against all of
@@ -116,8 +120,8 @@ func resolveOne(p *state.Port, pins Pins, runs Registry, index *Index) {
 		}
 	}
 	if runs != nil {
-		if g, _, ok := runs.Run(*p); ok && g != "" {
-			assign(p, g, state.SourceStart)
+		if run, ok := runs.Run(*p); ok && run.Group != "" {
+			assign(p, run.Group, state.SourceStart)
 			return
 		}
 	}

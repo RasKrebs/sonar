@@ -2,7 +2,9 @@ package ports
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -14,6 +16,14 @@ import (
 func Enrich(pp []ListeningPort) {
 	// Batch all PIDs into a single ps call for commands
 	commands := batchGetCommands(pp)
+
+	// netstat reports no process name, so on Windows a row whose command line
+	// the CIM query did not answer for has no identity at all — and identity
+	// is what decides whether a port is shown and which group it joins. One
+	// tasklist call fills in the names, per pid, for exactly those rows.
+	if runtime.GOOS == "windows" {
+		fillProcessNamesWindows(pp, commands)
+	}
 
 	for i := range pp {
 		if info, ok := commands[pp[i].PID]; ok {
@@ -160,6 +170,70 @@ func restAfterFields(line string, n int) string {
 		rest = rest[idx:]
 	}
 	return strings.TrimLeft(rest, " \t")
+}
+
+// fillProcessNamesWindows names the rows the CIM query left blank. tasklist
+// needs no WMI service and no elevation, so it answers when Get-CimInstance
+// does not, and a pid it cannot name simply stays unnamed: one process failing
+// to resolve must not cost the others their identity.
+func fillProcessNamesWindows(pp []ListeningPort, commands map[int]procInfo) {
+	missing := false
+	for i := range pp {
+		if pp[i].Process == "" && commands[pp[i].PID].command == "" {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return
+	}
+
+	out, err := exec.Command("tasklist", "/NH", "/FO", "CSV").Output()
+	if err != nil {
+		return
+	}
+	names := parseTasklist(string(out))
+	for i := range pp {
+		if pp[i].Process != "" {
+			continue
+		}
+		if name, ok := names[pp[i].PID]; ok {
+			pp[i].Process = name
+		}
+	}
+}
+
+// parseTasklist reads `tasklist /NH /FO CSV` into pid -> image name. Rows it
+// cannot parse are skipped; the ones it can are still returned.
+func parseTasklist(out string) map[int]string {
+	names := make(map[int]string)
+	r := csv.NewReader(strings.NewReader(strings.TrimSpace(out)))
+	r.FieldsPerRecord = -1
+	for {
+		rec, err := r.Read()
+		if errors.Is(err, io.EOF) {
+			return names
+		}
+		if err != nil {
+			// One unreadable line is one process we cannot name, not a reason
+			// to forget the ones already read.
+			var parseErr *csv.ParseError
+			if errors.As(err, &parseErr) {
+				continue
+			}
+			return names
+		}
+		if len(rec) < 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(rec[1]))
+		if err != nil {
+			continue
+		}
+		if name := strings.TrimSpace(rec[0]); name != "" {
+			names[pid] = name
+		}
+	}
 }
 
 // batchGetCommandsWindows fetches command lines and start times via PowerShell
@@ -347,6 +421,11 @@ func isDesktopApp(command string, process string, pid int) bool {
 
 // isWindowsDesktopApp detects Windows desktop apps and system services.
 // PID 0 (System Idle) and PID 4 (System) own ports like 135, 139, 445.
+//
+// Everything this reports is hidden from `sonar list` unless --all is passed,
+// and hidden rows never join a group, so the two guesses here are not
+// symmetric: showing a system service is noise, hiding a dev server is a
+// broken tool. Both rules below are written to err towards showing.
 func isWindowsDesktopApp(command string, process string, pid int) bool {
 	if pid == 0 || pid == 4 {
 		return true
@@ -357,16 +436,23 @@ func isWindowsDesktopApp(command string, process string, pid int) bool {
 		lower = strings.ToLower(process)
 	}
 	if lower == "" {
-		// No command or process name — system service not visible without elevation
-		return true
+		// Nothing is known about this process. That is not evidence of a
+		// system service: on Windows the identity comes from one CIM query,
+		// and when it answers for nothing — no PowerShell, no WMI, a policy in
+		// the way — reading its silence as "everything is a desktop app" hid
+		// every port on the machine, dev servers included.
+		return false
 	}
 
 	// Windows system services
 	if strings.Contains(lower, `\windows\`) {
 		return true
 	}
-	// User-installed desktop apps (AppData\Local houses Discord, Cursor, Slack, etc.)
-	if strings.Contains(lower, `\appdata\`) {
+	// User-installed desktop apps (AppData\Local houses Discord, Cursor, Slack,
+	// etc.), except the temp directory: %LOCALAPPDATA%\Temp is where every
+	// scratch build and one-off binary runs from, and none of them is an
+	// installed application.
+	if strings.Contains(lower, `\appdata\`) && !strings.Contains(lower, `\appdata\local\temp\`) {
 		return true
 	}
 	// Microsoft Store apps

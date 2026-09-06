@@ -22,15 +22,16 @@ func (p pinSet) Group(port state.Port) (string, bool) {
 // runSet is a Registry that answers for one port number.
 type runSet struct {
 	port  int
+	id    string
 	group string
 	name  string
 }
 
-func (r runSet) Run(p state.Port) (string, string, bool) {
+func (r runSet) Run(p state.Port) (state.Run, bool) {
 	if p.Port != r.port {
-		return "", "", false
+		return state.Run{}, false
 	}
-	return r.group, r.name, true
+	return state.Run{ID: r.id, Group: r.group, Name: r.name, RootPID: p.PID}, true
 }
 
 func TestAttributeWithAppliesPinsAndRuns(t *testing.T) {
@@ -41,7 +42,7 @@ func TestAttributeWithAppliesPinsAndRuns(t *testing.T) {
 
 	resolved, index := AttributeWith(pp,
 		pinSet{"port:3000": "storefront"},
-		runSet{port: 4000, group: "itest", name: "web"},
+		runSet{port: 4000, id: "r1", group: "itest", name: "web"},
 		nil)
 
 	if index == nil {
@@ -63,6 +64,51 @@ func TestAttributeWithAppliesPinsAndRuns(t *testing.T) {
 	// same attribution.
 	if pp[0].Group != "storefront" || pp[0].GroupSource != "manual" {
 		t.Errorf("scanner row = %q/%q, want storefront/manual", pp[0].Group, pp[0].GroupSource)
+	}
+}
+
+// TestAttributeWithPublishesTheRegistrysRun pins the invariant the daemon
+// broke: whatever the registry says owns a port has to reach the published row
+// as `run` and as the name clients render, not only as the group. A registry
+// answer that set `group_source: start` next to a null `run` is what a
+// `sonar start` racing a scan tick used to publish.
+func TestAttributeWithPublishesTheRegistrysRun(t *testing.T) {
+	pp := []ports.ListeningPort{
+		{Port: 4000, PID: 12, Process: "listener", Command: "/tmp/listener 4000"},
+	}
+
+	resolved, _ := AttributeWith(pp, nil, runSet{port: 4000, id: "r1", group: "itest", name: "web"}, nil)
+
+	if resolved[0].Run == nil {
+		t.Fatal("run is null; the registry's attribution never reached the row")
+	}
+	want := state.Run{ID: "r1", Group: "itest", Name: "web", RootPID: 12}
+	if *resolved[0].Run != want {
+		t.Errorf("run = %+v, want %+v", *resolved[0].Run, want)
+	}
+	if resolved[0].DisplayName != "web" {
+		t.Errorf("display_name = %q, want the name the run gave it", resolved[0].DisplayName)
+	}
+	if resolved[0].GroupSource == nil || *resolved[0].GroupSource != state.SourceStart {
+		t.Errorf("group_source = %v, want start", resolved[0].GroupSource)
+	}
+}
+
+// TestAttributeWithLeavesTheScannersOwnRunAlone is the no-daemon path: there is
+// no registry to ask, so whatever the scanner attributed from runs.json while
+// enriching has to survive.
+func TestAttributeWithLeavesTheScannersOwnRunAlone(t *testing.T) {
+	pp := []ports.ListeningPort{
+		{Port: 4000, PID: 12, Process: "listener", Tag: "web", RunGroup: "itest", RunID: "r1", RunRootPID: 9},
+	}
+
+	resolved, _ := AttributeWith(pp, nil, PortRuns{}, nil)
+
+	if resolved[0].Run == nil || resolved[0].Run.Name != "web" || resolved[0].Run.RootPID != 9 {
+		t.Fatalf("run = %+v, want the scanner's own attribution", resolved[0].Run)
+	}
+	if got := deref(resolved[0].Group); got != "itest" {
+		t.Errorf("group = %q, want itest", got)
 	}
 }
 

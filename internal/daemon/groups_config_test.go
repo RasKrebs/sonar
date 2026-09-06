@@ -92,10 +92,12 @@ func TestGroupsConfigGetByName(t *testing.T) {
 func TestGroupsConfigGetByPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Claimed before the harness so the harness stops before the directory it
+	// has indexed is removed.
+	dir := resolvedDir(t, t.TempDir())
 	h := newHarness(t, ctx)
 	c := h.dial(ctx)
 
-	dir := resolvedDir(t, t.TempDir())
 	path := filepath.Join(dir, groups.ConfigName)
 	if err := os.WriteFile(path, []byte(configFixture), 0o644); err != nil {
 		t.Fatal(err)

@@ -55,6 +55,8 @@ func AttributeWith(pp []ports.ListeningPort, pins Pins, runs Registry, index *In
 		}
 	}
 
+	stampRuns(pp, runs)
+
 	resolved := Resolve(state.FromListeningAll(pp), pins, runs, index)
 	for i := range resolved {
 		pp[i].ProjectRoot = deref(resolved[i].ProjectRoot)
@@ -72,4 +74,34 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// stampRuns writes the registry's run attribution onto the scan rows before
+// they are converted, so `run`, `display_name` and `group` are all derived
+// from the same lookup at the same instant.
+//
+// Without this the daemon read the run twice from two places: the scanner
+// walked the mirrored runs.json while enriching (which is what fills `run` and
+// the name `display_name` shows), and the resolver asked the live in-memory
+// registry afterwards (which is what sets `group_source: start`). A run
+// registered in between the two published a port with the group but a null
+// run — the window is milliseconds wide, and on Linux the whole enrich pass is
+// milliseconds long, so a `sonar start` racing the scan tick landed in it.
+//
+// PortRuns, the direct-scan registry, hands back what the row already carries,
+// so this is a no-op without a daemon.
+func stampRuns(pp []ports.ListeningPort, runs Registry) {
+	if runs == nil {
+		return
+	}
+	for i := range pp {
+		if pp[i].PID <= 0 {
+			continue
+		}
+		run, ok := runs.Run(state.FromListening(pp[i]))
+		if !ok || (run.ID == "" && run.Group == "" && run.Name == "") {
+			continue
+		}
+		pp[i].RunID, pp[i].RunGroup, pp[i].Tag, pp[i].RunRootPID = run.ID, run.Group, run.Name, run.RootPID
+	}
 }
