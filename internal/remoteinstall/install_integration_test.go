@@ -27,6 +27,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 // testVersion is the release the fake host installs. It is injected into the
@@ -381,8 +383,12 @@ func (h *fakeHost) runScript(t *testing.T, script string) (string, error) {
 
 // buildSonar compiles the CLI once per test run, with the release version this
 // test pretends to be installing baked in.
+// The binary goes under testenv.Root(): the leak gate only claims a `serve`
+// whose executable lives inside this run's own temp root, so a daemon this
+// harness starts has to be built there to be recognised — and one another run
+// built has to be somewhere else to be left alone.
 var buildSonar = sync.OnceValues(func() (string, error) {
-	dir, err := os.MkdirTemp("", "sonar-ri-bin")
+	dir, err := os.MkdirTemp(testenv.Root(), "sonar-ri-bin")
 	if err != nil {
 		return "", err
 	}

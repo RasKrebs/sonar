@@ -12,14 +12,14 @@ func TestIsolateMovesEverythingIntoTempDir(t *testing.T) {
 	if Root() == "" {
 		t.Fatal("Isolate did not run before the tests")
 	}
-	RequireIsolated(t, Root(), ConfigDir(), os.Getenv("HOME"), os.Getenv("SONAR_DB"))
+	RequireIsolated(t, Home(), ConfigDir(), os.Getenv("HOME"), os.Getenv("SONAR_DB"))
 
 	real, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("resolving the home directory: %v", err)
 	}
-	if real != Root() {
-		t.Fatalf("os.UserHomeDir() = %s, want the isolated %s", real, Root())
+	if real != Home() {
+		t.Fatalf("os.UserHomeDir() = %s, want the isolated %s", real, Home())
 	}
 	if _, err := os.Stat(ConfigDir()); err != nil {
 		t.Errorf("the isolated config directory is not there: %v", err)
@@ -58,10 +58,15 @@ func TestIsolatedRejectsPathsOutside(t *testing.T) {
 	if Isolated("/etc/passwd") {
 		t.Error("/etc/passwd counted as isolated")
 	}
+	// Another run's directory is under the same machine temp directory and is
+	// no more this run's business than /etc is.
+	if Isolated(filepath.Join(machineTempDir(), "snrun-some-other-run")) {
+		t.Error("another run's temp directory counted as isolated")
+	}
 	if Isolated() {
 		t.Error("no paths at all counted as isolated")
 	}
-	if !Isolated(filepath.Join(Root(), ".config", "sonar", "sonar.db")) {
+	if !Isolated(filepath.Join(Home(), ".config", "sonar", "sonar.db")) {
 		t.Error("a path under the isolated HOME did not count as isolated")
 	}
 }
@@ -93,8 +98,31 @@ func TestIsDaemonOf(t *testing.T) {
 	}
 }
 
+// isRunRootDaemon is the default second rule: anything under this run's root,
+// and nothing else, because nothing else put anything there.
+func TestIsRunRootDaemon(t *testing.T) {
+	inRoot := filepath.Join(Root(), "sonar-itest-bin123", "sonar")
+	if !isRunRootDaemon(inRoot + " serve") {
+		t.Errorf("%s serve was not recognised as this run's daemon", inRoot)
+	}
+	if isRunRootDaemon(inRoot + " list") {
+		t.Error("`sonar list` was mistaken for a daemon")
+	}
+	if isRunRootDaemon("/usr/local/bin/sonar serve") {
+		t.Error("an installed sonar daemon was mistaken for a test leak")
+	}
+	// The whole point: another run's binary is under the machine's temp
+	// directory too, and must not be touched.
+	other := filepath.Join(machineTempDir(), "snrun999", "sonar-itest-bin", "sonar")
+	if isRunRootDaemon(other + " serve") {
+		t.Errorf("%s serve, which belongs to another test run, matched", other)
+	}
+}
+
+// The opt-in wide net for CI keeps the old shape: any `sonar serve` from
+// anywhere under the machine's temp directory.
 func TestIsTempBuiltDaemon(t *testing.T) {
-	inTemp := filepath.Join(os.TempDir(), "sonar-itest-bin123", "sonar")
+	inTemp := filepath.Join(machineTempDir(), "sonar-itest-bin123", "sonar")
 	if !isTempBuiltDaemon(inTemp + " serve") {
 		t.Errorf("%s serve was not recognised as a test-built daemon", inTemp)
 	}
@@ -103,6 +131,34 @@ func TestIsTempBuiltDaemon(t *testing.T) {
 	}
 	if isTempBuiltDaemon(inTemp + " list") {
 		t.Error("`sonar list` was mistaken for a daemon")
+	}
+}
+
+// `ps -axo command=` joins argv with spaces and quotes nothing, so the
+// executable of a `serve` has to be found by the argument boundary rather than
+// by splitting on whitespace.
+func TestSplitServe(t *testing.T) {
+	tests := []struct {
+		cmdline string
+		want    string
+		ok      bool
+	}{
+		{"/tmp/x/sonar serve", "/tmp/x/sonar", true},
+		{"/tmp/x/sonar serve --detach", "/tmp/x/sonar", true},
+		{"/tmp/my dir/sonar serve --detach", "/tmp/my dir/sonar", true},
+		// A directory called "serve" is not the argument.
+		{"/tmp/a serve/sonar serve", "/tmp/a serve/sonar", true},
+		{"/tmp/x/sonar serveall", "", false},
+		{"/tmp/x/sonar list", "", false},
+		{"/tmp/x/sonar", "", false},
+		{"serve", "", false},
+		{"", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := splitServe(tt.cmdline)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("splitServe(%q) = (%q, %v), want (%q, %v)", tt.cmdline, got, ok, tt.want, tt.ok)
+		}
 	}
 }
 

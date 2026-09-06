@@ -31,8 +31,12 @@ import (
 )
 
 // buildBinary compiles the sonar CLI once per test run.
+// The binary goes under testenv.Root(): the leak gate only claims a `serve`
+// whose executable lives inside this run's own temp root, so a daemon this
+// harness starts has to be built there to be recognised — and one another run
+// built has to be somewhere else to be left alone.
 var buildBinary = sync.OnceValues(func() (string, error) {
-	dir, err := os.MkdirTemp("", "sonar-remote-itest-bin")
+	dir, err := os.MkdirTemp(testenv.Root(), "sonar-remote-itest-bin")
 	if err != nil {
 		return "", err
 	}

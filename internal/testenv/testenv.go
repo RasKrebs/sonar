@@ -14,6 +14,12 @@
 // TestMain, and from then on nothing in that binary can find the real install
 // even if it tries.
 //
+// A run also gets a private root under the machine's temp directory, which
+// becomes its TMPDIR (Root). t.TempDir, os.CreateTemp and a harness that
+// builds the real binary with `go build -o` therefore all write inside it, and
+// the leak gate can name the daemons this run is responsible for without
+// touching another `go test` running beside it on the same machine.
+//
 // Usage:
 //
 //	func TestMain(m *testing.M) { os.Exit(testenv.Run(m)) }
@@ -48,14 +54,20 @@ const (
 	socketEnv      = "SONAR_SOCKET"
 	dbEnv          = "SONAR_DB"
 	allowTestEnv   = "SONAR_ALLOW_TEST_DAEMON"
+	gateAllEnv     = "SONAR_TESTENV_GATE_ALL"
 )
 
-// root is the isolated HOME, and sockRoot the short directory holding the
-// socket. They are set once, by Isolate, before any test runs.
+// runRoot is this run's private directory under the machine's temp directory
+// and the TMPDIR every child inherits; home is the isolated HOME inside it,
+// and sockRoot the short directory holding the socket. realTemp is the
+// machine's temp directory as it was before runRoot displaced it. They are set
+// once, by Isolate, before any test runs.
 var (
-	root     string
+	runRoot  string
+	home     string
 	sockRoot string
 	realHome string
+	realTemp string
 )
 
 // Run isolates the process, runs the tests, and fails the run if the suite
@@ -82,19 +94,32 @@ func Run(m *testing.M) int {
 // developer's real install, and there is no test result worth that.
 func Isolate() func() {
 	realHome, _ = os.UserHomeDir()
+	realTemp = os.TempDir()
 	preserveGoEnv()
 
-	home, err := os.MkdirTemp("", "sonar-testhome")
+	// One root per run, and TMPDIR points at it, so t.TempDir, os.CreateTemp and
+	// a harness `go build -o` all land in a directory this run owns. That
+	// ownership is what lets the leak gate tell a daemon this run started from
+	// one another `go test` on the same machine is still using: every run
+	// shares os.TempDir(), and a gate that matched all of it killed its
+	// neighbours.
+	//
+	// The names are terse because they are a prefix of every socket path, and
+	// macOS caps a unix socket at about 104 bytes.
+	run, err := os.MkdirTemp("", "snrun")
 	if err != nil {
-		die("creating an isolated HOME: %v", err)
+		die("creating this run's temp root: %v", err)
 	}
-	// Not under home: macOS caps a unix socket path at about 104 bytes and
-	// "<tmp>/sonar-testhome<random>/.config/sonar/daemon.sock" is over it.
-	sock, err := os.MkdirTemp("", "snrt")
-	if err != nil {
+	runRoot = run
+	setTempDir(run)
+
+	// The socket directory is a sibling of HOME rather than a child: macOS caps
+	// a unix socket path at about 104 bytes and
+	// "<run>/h/.config/sonar/daemon.sock" leaves too little room.
+	home, sockRoot = filepath.Join(run, "h"), filepath.Join(run, "s")
+	if err := os.MkdirAll(sockRoot, 0o700); err != nil {
 		die("creating an isolated socket directory: %v", err)
 	}
-	root, sockRoot = home, sock
 
 	configDir := filepath.Join(home, ".config", "sonar")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
@@ -109,7 +134,7 @@ func Isolate() func() {
 	set("XDG_CONFIG_HOME", filepath.Join(home, ".config")) // freedesktop
 	set("XDG_RUNTIME_DIR", filepath.Join(home, "run"))     // outranks HOME for the socket
 	set(dbEnv, filepath.Join(configDir, "sonar.db"))
-	set(socketEnv, socketPath(sock))
+	set(socketEnv, socketPath(sockRoot))
 	set(noAutostartEnv, "1")
 	// A leftover opt-in from the developer's shell must not disarm the guard
 	// that keeps a test binary from becoming a daemon.
@@ -124,12 +149,23 @@ func Isolate() func() {
 		die("HOME is still %s; refusing to run tests against the live install", realHome)
 	}
 	if !Isolated(configDir) {
-		die("the isolated config directory %s is not under %s", configDir, os.TempDir())
+		die("the isolated config directory %s is not under %s", configDir, runRoot)
+	}
+	if !sameDir(os.TempDir(), runRoot) {
+		die("os.TempDir() is %s, not this run's root %s", os.TempDir(), runRoot)
 	}
 
-	return func() {
-		os.RemoveAll(home)
-		os.RemoveAll(sock)
+	return func() { os.RemoveAll(runRoot) }
+}
+
+// setTempDir makes dir the temp directory of this process and of every child
+// it spawns, so that everything a test writes outside its own HOME still lands
+// in a directory this run owns.
+func setTempDir(dir string) {
+	set("TMPDIR", dir) // unix, and what os.TempDir reads there
+	if os.PathSeparator == '\\' {
+		set("TMP", dir) // windows, in the order os.TempDir consults them
+		set("TEMP", dir)
 	}
 }
 
@@ -164,8 +200,13 @@ func setDefault(key, value string) {
 	}
 }
 
-// Root is the isolated HOME. It is empty before Isolate runs.
-func Root() string { return root }
+// Root is this run's private temp root: the directory TMPDIR points at while
+// the tests run, and the one a harness building a binary should build into so
+// the leak gate recognises what it starts. It is empty before Isolate runs.
+func Root() string { return runRoot }
+
+// Home is the isolated HOME, inside Root.
+func Home() string { return home }
 
 // RealHome is the home directory this run displaced: the one the developer's
 // live sonar install lives in. Isolate is the only chance to read it, because
@@ -173,9 +214,9 @@ func Root() string { return root }
 func RealHome() string { return realHome }
 
 // ConfigDir is the isolated ~/.config/sonar.
-func ConfigDir() string { return filepath.Join(root, ".config", "sonar") }
+func ConfigDir() string { return filepath.Join(home, ".config", "sonar") }
 
-// Isolated reports whether path lies inside this run's temp directories. It is
+// Isolated reports whether path lies inside this run's own temp root. It is
 // what a package's own TestMain uses to check the real resolvers agree:
 //
 //	if !testenv.Isolated(config.Path(), store.Path(), daemon.SocketPath()) { ... }
@@ -184,21 +225,21 @@ func Isolated(paths ...string) bool {
 		return false
 	}
 	for _, p := range paths {
-		if p == "" || !(under(p, root) || under(p, sockRoot) || under(p, os.TempDir())) {
+		if p == "" || !under(p, runRoot) {
 			return false
 		}
 	}
 	return true
 }
 
-// RequireIsolated fails the test unless every path is inside this run's temp
-// directories.
+// RequireIsolated fails the test unless every path is inside this run's own
+// temp root.
 func RequireIsolated(t testing.TB, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
 		if !Isolated(p) {
 			t.Fatalf("%s is outside the isolated test environment (HOME=%s, TMPDIR=%s)",
-				p, root, os.TempDir())
+				p, home, runRoot)
 		}
 	}
 }
