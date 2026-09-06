@@ -119,9 +119,9 @@ func TestStartAttributesItsPortToTheGroup(t *testing.T) {
 		}
 	})
 
-	added, ok := waitForAddedPort(t, sub, port, 45*time.Second)
+	added, ok := waitForAttributedPort(t, sub, port, 45*time.Second)
 	if !ok {
-		t.Fatalf("no state.delta added port %d within 45s\n%s", port, out.String())
+		t.Fatalf("no state.delta carried port %d with its run within 45s\n%s", port, out.String())
 	}
 
 	if added.Group == nil || *added.Group != "itest" {
@@ -194,9 +194,16 @@ func interrupt(t *testing.T, cmd *exec.Cmd) {
 	}
 }
 
-// waitForAddedPort is waitForAdded, but it hands back the row so the test can
-// assert on the group the resolver put on it.
-func waitForAddedPort(t *testing.T, sub *client.Subscription, port int, timeout time.Duration) (state.Port, bool) {
+// waitForAttributedPort is waitForAdded, but it hands back the row so the test
+// can assert on the group and the run the resolver put on it.
+//
+// It waits for the delta that carries the run rather than the first delta that
+// mentions the port. The two are usually the same one, but they need not be:
+// the child binds its port before `sonar start` has had a chance to tell the
+// daemon who owns it, and a scan tick landing in that window publishes a real
+// listener that genuinely has no run yet. The daemon corrects it in the very
+// next delta, which is the row this test is about.
+func waitForAttributedPort(t *testing.T, sub *client.Subscription, port int, timeout time.Duration) (state.Port, bool) {
 	t.Helper()
 	deadline := time.After(timeout)
 	for {
@@ -205,14 +212,16 @@ func waitForAddedPort(t *testing.T, sub *client.Subscription, port int, timeout 
 			if !ok {
 				return state.Port{}, false
 			}
-			for _, p := range d.Ports.Added {
-				if p.Port == port {
-					return p, true
-				}
-			}
-			for _, p := range d.Ports.Updated {
-				if p.Port == port && p.Group != nil {
-					return p, true
+			for _, rows := range [][]state.Port{d.Ports.Added, d.Ports.Updated} {
+				for _, p := range rows {
+					if p.Port != port {
+						continue
+					}
+					if p.Run != nil {
+						return p, true
+					}
+					t.Logf("delta seq %d has port %d before its run was registered (group %v)",
+						d.Seq, port, p.Group)
 				}
 			}
 		case <-deadline:

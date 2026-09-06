@@ -17,9 +17,9 @@ func (f fakePins) Group(p state.Port) (string, bool) {
 type fakeRun struct{ group, name string }
 type fakeRuns map[int]fakeRun
 
-func (f fakeRuns) Run(p state.Port) (string, string, bool) {
+func (f fakeRuns) Run(p state.Port) (state.Run, bool) {
 	r, ok := f[p.Port]
-	return r.group, r.name, ok
+	return state.Run{Group: r.group, Name: r.name}, ok
 }
 
 // resolveFixture builds a repo, a linked worktree, a Compose project inside the
