@@ -160,6 +160,20 @@ func desktopBinaryNames(goos string) []string {
 
 // findSwiftTray keeps the pre-app behaviour: the binary shipped next to sonar,
 // or one on PATH.
+// LegacyTray reports whether the legacy macOS menu bar binary is installed on
+// this machine, whatever else is. Decide prefers the desktop app and so never
+// mentions a sonar-tray that sits beside it; `sonar doctor` wants to see the
+// leftover exactly then, which is why this is its own lookup.
+func LegacyTray() (string, bool) { return LegacyTrayIn(osEnv()) }
+
+// LegacyTrayIn is LegacyTray against an injected environment.
+func LegacyTrayIn(env Env) (string, bool) {
+	if env.GOOS != "darwin" {
+		return "", false
+	}
+	return findSwiftTray(env)
+}
+
 func findSwiftTray(env Env) (string, bool) {
 	if env.SelfDir != "" {
 		candidate := filepath.Join(env.SelfDir, "sonar-tray")

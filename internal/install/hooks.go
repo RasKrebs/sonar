@@ -122,6 +122,64 @@ func UninstallHooks(path string) (Action, error) {
 	return ActionRemoved, nil
 }
 
+// InstalledHooks counts the hook entries sonar wrote into the settings file at
+// path: the same `_sonar`-tagged entries InstallHooks writes and UninstallHooks
+// strips. A missing file is zero hooks, not an error, so `sonar doctor` can ask
+// about a settings file that was never created.
+func InstalledHooks(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("could not read %s: %w", path, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return 0, nil
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return 0, fmt.Errorf("could not parse %s as JSON: %w", path, err)
+	}
+	return countSonarHooks(root), nil
+}
+
+// countSonarHooks walks the same shape stripSonarHooks walks, counting instead
+// of removing.
+func countSonarHooks(root map[string]any) int {
+	hooksVal, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, groupsVal := range hooksVal {
+		groups, ok := groupsVal.([]any)
+		if !ok {
+			continue
+		}
+		for _, gv := range groups {
+			g, ok := gv.(map[string]any)
+			if !ok {
+				continue
+			}
+			if tagged(g) {
+				n++
+				continue
+			}
+			entries, ok := g["hooks"].([]any)
+			if !ok {
+				continue
+			}
+			for _, ev := range entries {
+				if e, ok := ev.(map[string]any); ok && tagged(e) {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
 // loadSettings returns the canonical bytes of the existing file (nil when the
 // file does not exist) and its decoded form.
 func loadSettings(path string) ([]byte, map[string]any, []string, error) {

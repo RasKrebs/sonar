@@ -113,6 +113,49 @@ type DaemonSchemaResult struct {
 	Schema json.RawMessage `json:"schema"`
 }
 
+// DoctorCheck is one diagnostic `sonar doctor` and `daemon.doctor` report. It
+// is the single Go type behind the table, the CLI's `--json` and the wire
+// result (contract §17), so a client that renders one renders the other.
+type DoctorCheck struct {
+	// ID names the check. Checks that exist once per external tool are
+	// dotted: `mcp_registered.claude_code`.
+	ID string `json:"id"`
+	// Status is ok, warn, fail or skip. Only `fail` makes the run not ok.
+	Status string `json:"status"`
+	// Summary is the one line a table row shows.
+	Summary string `json:"summary"`
+	// Detail is the evidence: paths, versions, the parse error. It is also
+	// where a check the daemon cannot run from its own process says so.
+	Detail string `json:"detail,omitempty"`
+	// Fix is the human hint: what to run, or what to edit.
+	Fix string `json:"fix,omitempty"`
+	// Fixable says `sonar doctor --fix` can repair this one unattended.
+	Fixable bool `json:"fixable"`
+}
+
+type DaemonDoctorParams struct {
+	HostParams
+	// Only keeps just these checks. An entry matches a check id exactly, or
+	// every check under it when the id is dotted (`mcp_registered`).
+	Only []string `json:"only,omitempty"`
+	// Project is the directory the project-scoped checks look at. Empty means
+	// the process's own working directory, which for the daemon is wherever it
+	// was started, so a client that cares always sends it.
+	Project string `json:"project,omitempty"`
+}
+
+// DaemonDoctorResult is what both `sonar doctor --json` and `daemon.doctor`
+// return. OK is false when any check failed.
+type DaemonDoctorResult struct {
+	OK     bool          `json:"ok"`
+	Checks []DoctorCheck `json:"checks"`
+	// Version is the version of the process that ran the checks: the CLI for
+	// `sonar doctor`, the daemon for `daemon.doctor`.
+	Version string `json:"version"`
+	// DaemonVersion is the daemon's version, empty when it is not reachable.
+	DaemonVersion string `json:"daemon_version"`
+}
+
 // ----------------------------------------------------------------- state ---
 
 type StateSnapshotParams struct {
