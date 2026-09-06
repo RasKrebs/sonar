@@ -267,28 +267,6 @@ func isOpaqueName(name string) bool {
 	return false
 }
 
-// parseSystemdUnit extracts a systemd unit name from /proc/<pid>/cgroup contents.
-// Handles both cgroup v1 and v2 layouts. Returns "" if no real unit is found.
-func parseSystemdUnit(cgroup string) string {
-	for _, line := range strings.Split(cgroup, "\n") {
-		// cgroup v2 line: "0::/system.slice/nginx.service"
-		// cgroup v1 line: "1:name=systemd:/system.slice/nginx.service"
-		idx := strings.LastIndex(line, "/")
-		if idx < 0 {
-			continue
-		}
-		seg := line[idx+1:]
-		if strings.HasSuffix(seg, ".service") || strings.HasSuffix(seg, ".scope") {
-			// Skip user session scopes which aren't real services.
-			if strings.HasPrefix(seg, "session-") || strings.HasPrefix(seg, "user@") {
-				continue
-			}
-			return seg
-		}
-	}
-	return ""
-}
-
 // isNoiseDir reports whether a directory name is a generic build / temp
 // directory that doesn't identify a project (and so should be skipped when
 // augmenting names with cwd context).

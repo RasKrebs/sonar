@@ -38,10 +38,10 @@ func TestResolveProcessName(t *testing.T) {
 
 		// Python -c (multiprocessing.spawn worker)
 		{
-			name: "python -c with parent uvicorn",
-			cmd:  "/usr/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(...)",
+			name:      "python -c with parent uvicorn",
+			cmd:       "/usr/bin/python -c from multiprocessing.spawn import spawn_main; spawn_main(...)",
 			parentCmd: "/Users/me/.venv/bin/python /Users/me/.venv/bin/uvicorn server:app --reload --port 8001",
-			want: "uvicorn",
+			want:      "uvicorn",
 		},
 		{
 			name:      "python -c with no parent falls back to interpreter",
@@ -188,53 +188,6 @@ func TestResolveProcessName(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("\ncmd:       %q\nparentCmd: %q\ncwd:       %q\ngot:  %q\nwant: %q",
 					tc.cmd, tc.parentCmd, tc.cwd, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestParseSystemdUnit(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "cgroup v2 system service",
-			in:   "0::/system.slice/nginx.service\n",
-			want: "nginx.service",
-		},
-		{
-			name: "cgroup v2 user app",
-			in:   "0::/user.slice/user-1000.slice/user@1000.service/app.slice/myapp.service\n",
-			want: "myapp.service",
-		},
-		{
-			name: "cgroup v1",
-			in:   "12:freezer:/\n11:devices:/system.slice/postgresql.service\n0::/\n",
-			want: "postgresql.service",
-		},
-		{
-			name: "scope unit",
-			in:   "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-something.scope\n",
-			want: "app-something.scope",
-		},
-		{
-			name: "no unit",
-			in:   "0::/user.slice/user-1000.slice/session-2.scope\n",
-			want: "",
-		},
-		{
-			name: "empty",
-			in:   "",
-			want: "",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseSystemdUnit(tc.in)
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}
