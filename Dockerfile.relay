@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+
+# The sonar relay, as one static binary on a distroless base.
+#
+# The image ships the whole `sonar` binary — the relay is a subcommand, not a
+# second program — and sets `relay serve` as the entrypoint, so a deployment is
+# one artefact and `docker run … sonar-relay --listen :9000` still takes relay
+# flags. It is published as ghcr.io/raskrebs/sonar-relay by
+# .github/workflows/release.yml on every v* tag.
+#
+#   docker build -f Dockerfile.relay -t sonar-relay .
+#   docker run -p 8787:8787 -v sonar-relay:/data sonar-relay
+
+# The builder runs on the host's own architecture and cross-compiles, which is
+# what makes an amd64+arm64 manifest cheap: no emulation, two `go build`s.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+
+ARG TARGETARCH
+ARG VERSION=dev
+
+WORKDIR /src
+
+# Dependencies first, so a source-only change reuses the module cache.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO_ENABLED=0 is not an optimisation: modernc.org/sqlite is pure Go, and a
+# cgo build would tie the binary to the builder's libc, which distroless does
+# not have.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath \
+      -ldflags="-s -w -X github.com/raskrebs/sonar/internal/selfupdate.Version=${VERSION}" \
+      -o /out/sonar .
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+LABEL org.opencontainers.image.title="sonar relay" \
+      org.opencontainers.image.description="The server side of sonar: telemetry today, expose and auth next." \
+      org.opencontainers.image.source="https://github.com/raskrebs/sonar" \
+      org.opencontainers.image.licenses="MIT"
+
+COPY --from=build /out/sonar /usr/local/bin/sonar
+
+# /data is the SQLite volume. With DATABASE_URL set the relay never touches it.
+# The image runs as uid 65532 (distroless's nonroot), so a bind mount has to be
+# chowned to 65532 — a named volume inherits the right owner on its own.
+WORKDIR /data
+VOLUME ["/data"]
+ENV SONAR_RELAY_DB=/data/relay.db
+
+EXPOSE 8787
+USER nonroot:nonroot
+
+# No HEALTHCHECK: distroless has no shell and no curl on purpose. Point the
+# platform's probe at GET /healthz, which is unauthenticated and cheap.
+ENTRYPOINT ["/usr/local/bin/sonar", "relay", "serve"]

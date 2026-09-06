@@ -13,6 +13,10 @@ go generate ./... && git diff --exit-code docs/schema
 scripts/readme-check.sh
 ```
 
+The relay is not part of the daemon protocol, so `go generate` says nothing
+about it; its own gates are `go test ./internal/relay/...` and a
+`docker build -f Dockerfile.relay .`.
+
 The static builds the release makes, on the machine you are tagging from:
 
 ```sh
@@ -58,6 +62,27 @@ The tag triggers `release.yml`, which:
 
 `scripts/install.sh` and `scripts/install.ps1` read the same release assets, so
 nothing else has to be updated by hand.
+
+## The relay image
+
+The same tag also builds `Dockerfile.relay` and pushes
+`ghcr.io/raskrebs/sonar-relay:<tag>` and `:latest` for `linux/amd64` and
+`linux/arm64`, from the `relay-image` job. It needs nothing from the build jobs
+and publishes with the workflow's own `GITHUB_TOKEN` — the job asks for
+`packages: write`, and there is no secret to rotate.
+
+Both architectures are native `go build`s cross-compiled from the runner's own,
+so the job has no QEMU and takes about as long as one build. To check it before
+tagging:
+
+```sh
+docker build -f Dockerfile.relay -t sonar-relay .
+docker run --rm -p 8787:8787 sonar-relay &
+curl -fsS localhost:8787/healthz
+```
+
+The image is not part of the GitHub release and carries no checksum file: it is
+addressed by digest in the registry. `docs/RELAY.md` covers deploying it.
 
 ## `sonar_checksums.txt`
 

@@ -136,6 +136,44 @@ jobs:
             sonar_*.zip
             sonar_checksums.txt
 
+  # The relay is the same binary as the CLI, published as a container so it can
+  # be self-hosted. It is not part of the GitHub release, so it needs nothing
+  # from the build jobs and runs alongside them.
+  relay-image:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No QEMU: Dockerfile.relay builds on the runner's own architecture and
+      # cross-compiles with GOARCH, so both platforms are two native `go
+      # build`s rather than an emulated one.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.relay
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/raskrebs/sonar-relay:${{ github.ref_name }}
+            ghcr.io/raskrebs/sonar-relay:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   bump-homebrew:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
