@@ -132,8 +132,9 @@ type StartServiceInput struct {
 }
 
 // StartServiceOutput is the shape spec 2 §1.1 gives start_service. Session is
-// the object every other tool reports (contract §5), null when nothing in this
-// server's environment names an agent. TimedOut and Error are set together
+// the object every other tool reports (contract §5) and is null — like
+// Port.session — when nothing in this server's environment names an agent,
+// which is the normal case outside a coding agent. TimedOut and Error are set together
 // when wait_for_port ran out: the run is still there and its id, pid and log
 // path are how you go and look at it.
 type StartServiceOutput struct {
@@ -141,7 +142,7 @@ type StartServiceOutput struct {
 	PID      int            `json:"pid"`
 	Group    string         `json:"group"`
 	Name     string         `json:"name"`
-	Session  *state.Session `json:"session"`
+	Session  *state.Session `json:"session" jsonschema:"nullable"`
 	Ports    []state.Port   `json:"ports"`
 	LogPath  string         `json:"log_path"`
 	TimedOut bool           `json:"timed_out,omitempty"`

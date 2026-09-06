@@ -386,6 +386,7 @@ func TestRenamePortUnknownPort(t *testing.T) {
 
 func TestStartServiceWithoutWaitingReturnsTheRun(t *testing.T) {
 	h, actions := actionHarness(t)
+	clearAgentEnv(t)
 
 	res := h.call("start_service", map[string]any{
 		"command": []any{"python3", "-m", "http.server", "8000"},
@@ -415,6 +416,7 @@ func TestStartServiceWithoutWaitingReturnsTheRun(t *testing.T) {
 // starts listening a moment after the spawn, and the tool returns its row.
 func TestStartServiceWaitsForAKnownPort(t *testing.T) {
 	h, actions := actionHarness(t)
+	clearAgentEnv(t)
 	openWhenSpawned(t, actions, 8000)
 
 	res := h.call("start_service", map[string]any{
@@ -444,6 +446,7 @@ func TestStartServiceWaitsForAKnownPort(t *testing.T) {
 // does not know the port, and finds it through the run's attribution.
 func TestStartServiceAutoTakesWhateverPortOpens(t *testing.T) {
 	h, actions := actionHarness(t)
+	clearAgentEnv(t)
 	openWhenSpawned(t, actions, 8123)
 
 	res := h.call("start_service", map[string]any{
@@ -470,6 +473,7 @@ func TestStartServiceAutoTakesWhateverPortOpens(t *testing.T) {
 // still carries the run, because the next thing to do is read its log.
 func TestStartServiceTimesOutWithTheRunIntact(t *testing.T) {
 	h, _ := actionHarness(t)
+	clearAgentEnv(t)
 
 	res := h.call("start_service", map[string]any{
 		"command":         []any{"python3", "-m", "http.server", "8100"},
@@ -494,6 +498,69 @@ func TestStartServiceTimesOutWithTheRunIntact(t *testing.T) {
 	}
 	if payload.Error.Hint == "" {
 		t.Error("a timeout must say what to do next")
+	}
+}
+
+// TestStartServiceWithoutAnAgentEnvironmentHasNoSession: outside a coding
+// agent there is no session to attribute a run to, and the field is null
+// rather than an invented object — the same shape Port.session has.
+func TestStartServiceWithoutAnAgentEnvironmentHasNoSession(t *testing.T) {
+	h, _ := actionHarness(t)
+	clearAgentEnv(t)
+
+	res := h.call("start_service", map[string]any{
+		"command": []any{"npm", "run", "dev"},
+		"cwd":     "/home/dev/shop",
+	})
+	if res.IsError {
+		t.Fatalf("start_service failed: %s", textOf(res))
+	}
+	out := structured[mcpserver.StartServiceOutput](t, res)
+	if out.Session != nil {
+		t.Errorf("session = %+v, want null with no agent in the environment", out.Session)
+	}
+}
+
+// TestStartServiceAttributesTheAgentSession is the other half: the session is
+// detected in this process, because the daemon's own environment is a service
+// manager's and never an agent's (spec 2 §3).
+func TestStartServiceAttributesTheAgentSession(t *testing.T) {
+	h, _ := actionHarness(t)
+	clearAgentEnv(t)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "9f2c")
+	t.Setenv("CLAUDECODE", "1")
+
+	res := h.call("start_service", map[string]any{
+		"command": []any{"npm", "run", "dev"},
+		"cwd":     "/home/dev/shop",
+	})
+	if res.IsError {
+		t.Fatalf("start_service failed: %s", textOf(res))
+	}
+	out := structured[mcpserver.StartServiceOutput](t, res)
+	if out.Session == nil {
+		t.Fatal("start_service dropped the agent session")
+	}
+	if out.Session.ID != "9f2c" || out.Session.Tool != "claude-code" {
+		t.Errorf("session = %+v, want the claude-code session", out.Session)
+	}
+	if !out.Session.Detected {
+		t.Error("a session read off CLAUDECODE is detected, not declared")
+	}
+}
+
+// clearAgentEnv removes every marker sessions.Detect reads, so a test asserting
+// on attribution says the same thing on a laptop inside a coding agent and on a
+// bare CI runner.
+func clearAgentEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"SONAR_SESSION", "SONAR_SESSION_ID", "SONAR_SESSION_TOOL", "SONAR_SESSION_LABEL",
+		"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID",
+		"CODEX_SANDBOX", "CODEX_THREAD_ID",
+		"CURSOR_AGENT", "CURSOR_AGENT_SESSION_ID",
+	} {
+		t.Setenv(key, "")
 	}
 }
 
