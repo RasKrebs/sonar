@@ -452,3 +452,51 @@ func TestStatsTickLeavesRemoteRowsAlone(t *testing.T) {
 		t.Errorf("hosts after a stats tick = %v, want both localhost and the remote", names)
 	}
 }
+
+// A slow scan must not starve the tick. This is the whole reason the tick
+// takes commitMu rather than scanMu: a scan holds scanMu from its first OS
+// call to its last, and `docker stats` alone is two seconds of that, which
+// turned a 1 s sampler into a burst of deltas every five or six seconds.
+func TestStatsTickRunsWhileAScanIsInFlight(t *testing.T) {
+	r := newStatsRig(t)
+	r.loop.scanAndPublish(Include{Stats: true}) // a snapshot to refresh
+
+	scanning := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	rows := r.rows
+	r.loop.opts.Scan = func(Include) ([]ports.ListeningPort, error) {
+		once.Do(func() {
+			close(scanning)
+			<-release
+		})
+		return append([]ports.ListeningPort{}, rows...), nil
+	}
+
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		r.loop.scanAndPublish(Include{Stats: true})
+	}()
+	<-scanning
+
+	before := r.loop.Cached().Seq
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.loop.sampleStats(Include{Stats: true})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-scanDone
+		t.Fatal("the stats tick blocked behind a scan that was still doing OS work")
+	}
+	if got := r.loop.Cached().Seq; got <= before {
+		t.Errorf("seq = %d, want more than %d: the tick published nothing", got, before)
+	}
+
+	close(release)
+	<-scanDone
+}

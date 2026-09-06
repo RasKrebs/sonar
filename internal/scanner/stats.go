@@ -73,19 +73,18 @@ func (l *Loop) statsInterval() time.Duration {
 
 // sampleStats runs one stats-only tick and publishes what moved.
 //
-// It holds scanMu for exactly the reason a scan does (contract §38): a sample
-// must never interleave with a scan's commit, or the two would race to replace
-// the cached snapshot and `seq` order would stop matching publish order. It
-// never touches the scan interval, the scan counters or `lastScanAt`: the port
-// scan's adaptive cadence, the RPC cache TTL and `daemon status` all read
+// It never touches the scan interval, the scan counters or `lastScanAt`: the
+// port scan's adaptive cadence, the RPC cache TTL and `daemon status` all read
 // exactly what they read before this tick existed.
 func (l *Loop) sampleStats(include Include) {
-	// The publish happens under scanMu too, exactly as a scan's does. A tick
-	// that took its seq inside the lock and then published outside it can be
-	// overtaken by the next scan, and a subscriber sees seq 35 before seq 34
-	// — the one thing §38 promises will not happen.
-	l.scanMu.Lock()
-	defer l.scanMu.Unlock()
+	// commitMu, not scanMu: see the comment on the fields. It is held across
+	// the whole read-sample-commit-publish, not just the commit — a tick that
+	// read the snapshot, sampled, and only then took the lock could republish
+	// a port set a scan had already replaced in between, which is exactly the
+	// revert 1A.15 fixed for scans. Sampling is ~40 ms, so a scan waiting
+	// behind it waits ~40 ms.
+	l.commitMu.Lock()
+	defer l.commitMu.Unlock()
 
 	prev, next, changed := l.sampleStatsLocked(include)
 	if !changed {
@@ -97,7 +96,7 @@ func (l *Loop) sampleStats(include Include) {
 }
 
 // sampleStatsLocked builds the refreshed snapshot and commits it. Caller holds
-// scanMu.
+// commitMu.
 //
 // It rebuilds from l.local — this machine's own rows, before the remote hosts
 // were merged in — for the same reason RemoteChanged does: only localhost's
