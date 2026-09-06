@@ -44,12 +44,16 @@ type Subscription struct {
 	// for.
 	Events <-chan state.Event
 
-	c       *Client
-	deltas  chan state.Delta
-	events  chan state.Event
-	once    sync.Once
-	dropped bool
+	c      *Client
+	deltas chan state.Delta
+	events chan state.Event
+
+	// mu makes delivery and close mutually exclusive: the read loop must not
+	// send on a channel that Unsubscribe (or a dropped connection) is closing
+	// at the same moment.
 	mu      sync.Mutex
+	closed  bool
+	dropped bool
 }
 
 // Subscribe registers for state deltas. The returned Subscription carries the
@@ -117,17 +121,23 @@ func (s *Subscription) remove() {
 }
 
 func (s *Subscription) close() {
-	s.once.Do(func() {
-		close(s.deltas)
-		if s.events != nil {
-			close(s.events)
-		}
-	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.deltas)
+	if s.events != nil {
+		close(s.events)
+	}
 }
 
 // deliver routes one notification onto the right channel. A full channel drops
 // the message and sets Dropped rather than blocking the read loop, which would
-// stall every other call on this connection.
+// stall every other call on this connection. The sends hold s.mu so they cannot
+// race a concurrent close; they are non-blocking, so holding it cannot stall
+// the read loop either.
 func (s *Subscription) deliver(msg rpc.Message) {
 	switch msg.Method {
 	case rpc.MethodStateDelta:
@@ -135,10 +145,15 @@ func (s *Subscription) deliver(msg rpc.Message) {
 		if err := json.Unmarshal(msg.Params, &d); err != nil {
 			return
 		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return
+		}
 		select {
 		case s.deltas <- d:
 		default:
-			s.markDropped()
+			s.dropped = true
 		}
 	case rpc.MethodStateEvent:
 		if s.events == nil {
@@ -148,16 +163,15 @@ func (s *Subscription) deliver(msg rpc.Message) {
 		if err := json.Unmarshal(msg.Params, &e); err != nil {
 			return
 		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return
+		}
 		select {
 		case s.events <- e:
 		default:
-			s.markDropped()
+			s.dropped = true
 		}
 	}
-}
-
-func (s *Subscription) markDropped() {
-	s.mu.Lock()
-	s.dropped = true
-	s.mu.Unlock()
 }
