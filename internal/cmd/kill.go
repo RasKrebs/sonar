@@ -22,6 +22,7 @@ import (
 var (
 	killPIDFlag        []int
 	killGroupFlag      string
+	killSessionFlag    string
 	killAllFlag        bool
 	killFilterFlag     string
 	killProjectFlag    string
@@ -45,6 +46,7 @@ Examples:
   sonar kill 3000 5432 --force         # SIGKILL both
   sonar kill --pid 12345 --tree        # a process and everything below it
   sonar kill -g sonar                  # a whole group, confirms unless --yes
+  sonar kill --session current -y      # everything this agent session started
   sonar kill --all --filter docker -y  # every container publishing a port
   sonar kill --all --project my-app    # one Docker Compose project
   sonar kill 3000 --ip 127.0.0.1       # disambiguate a multi-bind port
@@ -59,6 +61,8 @@ matches a running process is read as a pid.`,
 func init() {
 	killCmd.Flags().IntSliceVar(&killPIDFlag, "pid", nil, "Kill by process id (repeatable)")
 	killCmd.Flags().StringVarP(&killGroupFlag, "group", "g", "", "Kill every port in a group")
+	killCmd.Flags().StringVar(&killSessionFlag, "session", "",
+		"Stop everything an agent `session` started (`current` is this shell's own)")
 	killCmd.Flags().BoolVar(&killAllFlag, "all", false, "Kill every listening port")
 	killCmd.Flags().StringVar(&killFilterFlag, "filter", "", "With --all: keep only docker, user or system ports")
 	killCmd.Flags().StringVar(&killProjectFlag, "project", "", "With --all: keep only one Docker Compose project")
@@ -72,12 +76,21 @@ func init() {
 	killCmd.Flags().String("ip", "", "Bind address, when a port is bound to several")
 	killCmd.Flags().BoolVar(&killJSONFlag, "json", false, "Print the result list as JSON")
 	killCmd.MarkFlagsMutuallyExclusive("group", "all")
+	killCmd.MarkFlagsMutuallyExclusive("session", "all")
+	killCmd.MarkFlagsMutuallyExclusive("session", "group")
 	rootCmd.AddCommand(killCmd)
 }
 
 func runKill(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
 	bindIP, _ := cmd.Flags().GetString("ip")
+
+	if killSessionFlag != "" {
+		if len(args) > 0 || len(killPIDFlag) > 0 {
+			return fmt.Errorf("--session cannot be combined with ports or pids")
+		}
+		return killSession(cmd.Context())
+	}
 
 	// A reachable daemon does the killing, so it rescans straight afterwards
 	// and the history ring sees the port go down (contract §22). Without this
