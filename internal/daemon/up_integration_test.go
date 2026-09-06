@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -297,12 +299,22 @@ func reportGroupDiagnostics(t *testing.T, e *env, dir, lastOut string, lastErr e
 	t.Helper()
 	t.Logf("last `sonar groups --json` (err %v):\n%s", lastErr, lastOut)
 
-	for _, args := range [][]string{{"runs", "--json"}, {"list", "--json"}} {
+	for _, args := range [][]string{{"runs", "--json"}, {"list", "--json"}, {"list", "-a", "--json"}} {
 		cmd := e.command(args...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		t.Logf("`sonar %s` (err %v):\n%s", strings.Join(args, " "), err, out)
 	}
+
+	// `list` hides desktop apps and `list -a` does not, so a scan that reaches
+	// the daemon and still shows nothing is either an empty scan or a
+	// classification that hid it. The raw OS output says which.
+	scan := exec.Command("netstat", "-ano")
+	if runtime.GOOS != "windows" {
+		scan = exec.Command("lsof", "-iTCP", "-sTCP:LISTEN", "-n", "-P")
+	}
+	out, err := scan.CombinedOutput()
+	t.Logf("`%s` (err %v):\n%s", strings.Join(scan.Args, " "), err, out)
 
 	registry := filepath.Join(e.home, ".config", "sonar", "runs.json")
 	if data, err := os.ReadFile(registry); err == nil {
