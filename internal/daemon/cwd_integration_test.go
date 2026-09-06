@@ -130,12 +130,48 @@ func TestCwdGroupsPortsUnderTheGitRoot(t *testing.T) {
 	t.Logf("sonar list --tree:\n%s", treeOut)
 	section := treeSection(string(treeOut), repoName)
 	if section == nil {
+		// The rows are in the daemon — waitForCwds proved it — so a group
+		// missing from the tree is the display filter, not the scan. `list`
+		// hides desktop apps and `list -a` does not, and is_app is the field
+		// that decides it, so print the rows the filter judged.
+		reportPortRows(t, e, repo, rootPort, nestedPort)
+		reportGroupDiagnostics(t, e, repo, "", nil)
 		t.Fatalf("no %q group in the tree:\n%s", repoName, treeOut)
 	}
 	for _, port := range []int{rootPort, nestedPort} {
 		if !sectionHasPort(section, port) {
 			t.Errorf("port %d is not under the %q group:\n%s", port, repoName, treeOut)
 		}
+	}
+}
+
+// reportPortRows prints everything about the spawned listeners that decides
+// whether they are displayed: their identity, what the OS said about them, and
+// the is_app verdict that follows from it.
+func reportPortRows(t *testing.T, e *env, dir string, wanted ...int) {
+	t.Helper()
+	cmd := e.command("list", "-a", "--json")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("`sonar list -a --json` failed: %v\n%s", err, out)
+		return
+	}
+	var rows []state.Port
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Logf("decoding `sonar list -a --json`: %v\n%s", err, out)
+		return
+	}
+	want := map[int]bool{}
+	for _, p := range wanted {
+		want[p] = true
+	}
+	for _, p := range rows {
+		if !want[p.Port] {
+			continue
+		}
+		t.Logf("port %d: is_app=%v process=%q command=%q cwd=%q project_root=%v group=%v type=%s",
+			p.Port, p.IsApp, p.Process, p.Command, p.Cwd, deref(p.ProjectRoot), deref(p.Group), p.Type)
 	}
 }
 
