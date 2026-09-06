@@ -17,6 +17,7 @@ import (
 var (
 	nextConsecutiveFlag int
 	nextJSONFlag        bool
+	nextClaimFlag       bool
 )
 
 var nextCmd = &cobra.Command{
@@ -34,7 +35,8 @@ Examples:
   sonar next 8000         # first free port starting from 8000
   sonar next 3000-3100    # first free port in range 3000-3100
   sonar next -n 3          # find 3 consecutive free ports from 3000
-  sonar next 8000 --json  # JSON output`,
+  sonar next 8000 --json  # JSON output
+  sonar next --claim      # reserve the port for this worktree, not just report it`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: nextRun,
 }
@@ -42,12 +44,23 @@ Examples:
 func init() {
 	nextCmd.Flags().IntVarP(&nextConsecutiveFlag, "consecutive", "n", 1, "Number of consecutive free ports to find")
 	nextCmd.Flags().BoolVar(&nextJSONFlag, "json", false, "Output as JSON")
+	nextCmd.Flags().BoolVar(&nextClaimFlag, "claim", false, "Claim the ports for this project and worktree (needs the daemon)")
 	rootCmd.AddCommand(nextCmd)
 }
 
 func nextRun(cmd *cobra.Command, args []string) error {
 	startPort := 3000
 	endPort := 65535
+
+	if nextClaimFlag {
+		if len(args) == 1 {
+			return fmt.Errorf("--claim derives its own ports; drop the port argument")
+		}
+		if nextConsecutiveFlag < 1 {
+			return fmt.Errorf("--consecutive must be at least 1")
+		}
+		return nextClaim(cmd)
+	}
 
 	if len(args) == 1 {
 		arg := args[0]
@@ -154,4 +167,27 @@ func findFreePorts(occupied map[int]bool, start, end, count int) []int {
 		}
 	}
 	return consecutive
+}
+
+// nextClaim is `sonar next --claim`: instead of reporting a port that is free
+// right now, reserve it for this project and worktree so the next agent asking
+// gets a different one. The ports come from the claim range, not from the
+// --start argument, which is why the two cannot be combined.
+func nextClaim(cmd *cobra.Command) error {
+	c, err := connectForWrite(cmd.Context())
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	project, worktree := claimIdentity()
+	res, err := acquireClaim(cmd.Context(), c, rpc.ClaimsAcquireParams{
+		Project:  project,
+		Worktree: worktree,
+		Count:    nextConsecutiveFlag,
+	})
+	if err != nil {
+		return err
+	}
+	return printClaim(project, worktree, res, nextJSONFlag)
 }
