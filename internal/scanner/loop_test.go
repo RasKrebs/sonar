@@ -70,7 +70,8 @@ func TestLoopBacksOffThenSnapsBack(t *testing.T) {
 	rows := []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 100, Process: "node"}}
 
 	l := New(Options{
-		Demand: func() (int, Include) { return 1, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 1, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -103,7 +104,8 @@ func TestLoopBacksOffThenSnapsBack(t *testing.T) {
 // RPC reads only and may back all the way off to 10 s.
 func TestBackoffCapsAtMaxInterval(t *testing.T) {
 	l := New(Options{
-		Demand: func() (int, Include) { return 0, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 0, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
 		},
@@ -122,7 +124,8 @@ func TestBackoffCapsAtMaxInterval(t *testing.T) {
 func TestBackoffCapsAtFiveSecondsWithASubscriber(t *testing.T) {
 	subs := 0
 	l := New(Options{
-		Demand: func() (int, Include) { return subs, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return subs, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 1}}, nil
 		},
@@ -154,7 +157,8 @@ func TestPublishesAddAndRemove(t *testing.T) {
 
 	var published []state.Delta
 	l := New(Options{
-		Demand: func() (int, Include) { return 1, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 1, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -194,7 +198,8 @@ func TestSeqIsMonotonic(t *testing.T) {
 	var mu sync.Mutex
 	n := 0
 	l := New(Options{
-		Demand: func() (int, Include) { return 1, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 1, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -235,7 +240,8 @@ func TestScanErrorKeepsLastGoodState(t *testing.T) {
 	var events []state.Event
 
 	l := New(Options{
-		Demand: func() (int, Include) { return 1, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 1, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			if fail.Load() {
 				return nil, errors.New("lsof: not found")
@@ -272,7 +278,8 @@ func TestScanErrorKeepsLastGoodState(t *testing.T) {
 func TestSnapshotUsesTheCacheWithinTTL(t *testing.T) {
 	var scans atomic.Int64
 	l := New(Options{
-		Demand: func() (int, Include) { return 0, Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return 0, Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			scans.Add(1)
 			return []ports.ListeningPort{{Port: 3000, BindAddress: "127.0.0.1", PID: 7}}, nil
@@ -297,7 +304,8 @@ func TestLoopParksWithNoSubscribers(t *testing.T) {
 	var subs atomic.Int64
 
 	l := New(Options{
-		Demand: func() (int, Include) { return int(subs.Load()), Include{} },
+		HostStats: fixedHost,
+		Demand:    func() (int, Include) { return int(subs.Load()), Include{} },
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			scans.Add(1)
 			return nil, nil
@@ -322,4 +330,11 @@ func TestLoopParksWithNoSubscribers(t *testing.T) {
 	if scans.Load() == 0 {
 		t.Fatal("loop did not scan after a subscriber arrived")
 	}
+}
+
+// fixedHost is a host collector that answers the same row every time, so a
+// test's seq and deltas move only when the ports it fakes do. The production
+// collector reports live cpu, which changes on nearly every tick.
+func fixedHost(context.Context) (state.Host, error) {
+	return state.Host{Kernel: "test-kernel", OS: "testos", Arch: "testarch"}, nil
 }

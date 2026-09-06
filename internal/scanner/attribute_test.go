@@ -25,6 +25,7 @@ func openStore(t *testing.T) *store.Store {
 // loopWith builds a loop over a fixed scan result, backed by st.
 func loopWith(st Store, rows ...ports.ListeningPort) *Loop {
 	l := New(Options{
+		HostStats:     fixedHost,
 		DaemonVersion: "test",
 		Store:         st,
 		Scan: func(Include) ([]ports.ListeningPort, error) {
@@ -99,6 +100,7 @@ func TestScanRecordsHistoryFromTheDiff(t *testing.T) {
 	up := ports.ListeningPort{Port: 8123, PID: 42, Process: "python3", Command: "python3 -m http.server"}
 	var rows []ports.ListeningPort
 	l := New(Options{
+		HostStats:     fixedHost,
 		DaemonVersion: "test",
 		Store:         st,
 		Scan: func(Include) ([]ports.ListeningPort, error) {
@@ -193,6 +195,7 @@ func TestRemembersNewlySeenRoots(t *testing.T) {
 func TestInvalidateForcesTheNextReadToRescan(t *testing.T) {
 	scans := 0
 	l := New(Options{
+		HostStats:     fixedHost,
 		DaemonVersion: "test",
 		Scan: func(Include) ([]ports.ListeningPort, error) {
 			scans++
