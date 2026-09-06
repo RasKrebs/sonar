@@ -98,10 +98,15 @@ func (l *Loop) sampleStats(include Include) {
 // sampleStatsLocked builds the refreshed snapshot and commits it. Caller holds
 // commitMu.
 //
-// It rebuilds from l.local — this machine's own rows, before the remote hosts
-// were merged in — for the same reason RemoteChanged does: only localhost's
-// processes are sampled here, and re-merging the remote contribution keeps a
-// remote host's rows and its `hosts` entry intact across a local stats tick.
+// It patches the published snapshot in place — this machine's `stats` objects
+// and the localhost `hosts` row — rather than rebuilding it by re-merging
+// l.remoteRows(). Re-merging would let a tick pick up a remote bridge's newest
+// rows as a side effect and commit them; RemoteChanged would then diff against
+// a snapshot that already carries them, find nothing to do, and the remote
+// change would reach no subscriber at all while a later state.snapshot showed
+// rows no delta ever announced. Keeping the tick strictly localhost means it
+// can only ever move what it actually sampled, and RemoteChanged stays the one
+// thing that publishes a remote host's state.
 func (l *Loop) sampleStatsLocked(include Include) (prev, next state.Snapshot, changed bool) {
 	l.mu.Lock()
 	prev, local, have := l.snap, l.local, l.haveSnap
@@ -120,39 +125,74 @@ func (l *Loop) sampleStatsLocked(include Include) (prev, next state.Snapshot, ch
 	host := l.collectHost()
 
 	at := l.now()
-	local.Ports = refreshStats(local.Ports, samples)
 	host.Ports, host.Groups = len(local.Ports), len(local.Groups)
 	host.LastSeen = at.Format(time.RFC3339)
+
+	next = prev
+	next.At = host.LastSeen
+	next.Ports = refreshStats(prev.Ports, samples)
+	next.Hosts = replaceLocalhost(prev.Hosts, host)
+
+	// next differs from prev in the stats objects and the localhost row and
+	// in nothing else, by construction, so this narrow comparison is exact.
+	changed = statsChanged(prev.Ports, next.Ports) || hostChanged(prev, next)
+	if !changed {
+		// Commit nothing. A snapshot that differs from the published one and
+		// is never published is how a change goes missing; when the readings
+		// are identical there is nothing to carry forward anyway.
+		return prev, next, false
+	}
+
+	// This machine's own half, kept in step so RemoteChanged — which rebuilds
+	// from it — cannot republish the stats this tick has just replaced.
+	local.Ports = refreshStats(local.Ports, samples)
 	local.Hosts = []state.Host{host}
-	local = local.Tag(state.LocalhostName).Normalize()
-
-	next = local.Append(l.remoteRows()).Into(state.Snapshot{
-		At:              at.Format(time.RFC3339),
-		DaemonVersion:   l.opts.DaemonVersion,
-		ExposuresActive: prev.ExposuresActive,
-	})
-
-	// The full comparison, not just the stats one: a remote bridge may have
-	// replaced its rows since the last publish without RemoteChanged having
-	// run yet, and committing those silently would lose them — the next
-	// RemoteChanged would diff against a snapshot that already carries them.
-	changed = snapshotChanged(prev, next, true) || hostChanged(prev, next)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.local = local
-	if !changed {
-		// Commit anyway, so the next tick diffs against the newest reading,
-		// but keep the seq: a snapshot nobody was told about must not consume
-		// a sequence number (contract §15's resync rule).
-		next.Seq = prev.Seq
-		l.snap = next
-		return prev, next, false
-	}
 	l.seq++
 	next.Seq = l.seq
 	l.snap = next
 	return prev, next, true
+}
+
+// replaceLocalhost swaps the localhost row of a `hosts` collection, leaving
+// every registered remote host's row exactly as it was.
+func replaceLocalhost(prev []state.Host, host state.Host) []state.Host {
+	out := make([]state.Host, 0, len(prev)+1)
+	replaced := false
+	for _, h := range prev {
+		if state.IsLocalhost(h.Name) {
+			out, replaced = append(out, host), true
+			continue
+		}
+		out = append(out, h)
+	}
+	if !replaced {
+		out = append(out, host)
+	}
+	return out
+}
+
+// statsChanged reports whether any row's stats object moved. The two slices
+// are index-aligned — next is prev with stats replaced — so this compares
+// position by position rather than going through a keyed diff.
+func statsChanged(prev, next []state.Port) bool {
+	if len(prev) != len(next) {
+		return true
+	}
+	for i := range next {
+		a, b := prev[i].Stats, next[i].Stats
+		switch {
+		case a == nil && b == nil:
+		case a == nil || b == nil:
+			return true
+		case *a != *b:
+			return true
+		}
+	}
+	return false
 }
 
 // statsPIDs are the processes a stats tick samples: the ones this machine's
@@ -175,24 +215,25 @@ func statsPIDs(pp []state.Port) []int {
 	return pids
 }
 
-// refreshStats returns the previous rows with only their `stats` object
-// replaced. Every other field — display name, group, health, started_at, the
-// host tag — is carried through untouched, which is what makes a stats delta
-// invisible to a subscriber that did not ask for stats.
+// refreshStats returns the given rows with only their `stats` object replaced.
+// Every other field — display name, group, health, started_at, the host tag —
+// is carried through untouched, which is what makes a stats delta invisible to
+// a subscriber that did not ask for stats, and a remote host's row is never
+// touched at all: pid 4242 on a build server is not pid 4242 here.
 //
 // A row the sample has nothing to say about keeps the stats it had: a pid that
 // vanished between the scan and this tick is dropped from the sample, not
 // zeroed on the wire, and the next port scan is what removes the row.
 // `connections` is carried forward too — counting them is an `lsof` (or `ss`,
 // or `netstat`) per port and stays on the scan tick.
-func refreshStats(prev []state.Port, samples map[int]ports.ProcSample) []state.Port {
+func refreshStats(rows []state.Port, samples map[int]ports.ProcSample) []state.Port {
 	if len(samples) == 0 {
-		return prev
+		return rows
 	}
-	out := make([]state.Port, len(prev))
-	copy(out, prev)
+	out := make([]state.Port, len(rows))
+	copy(out, rows)
 	for i := range out {
-		if out[i].Stats == nil || out[i].Type == state.TypeDocker {
+		if out[i].Stats == nil || out[i].Type == state.TypeDocker || !state.IsLocalhost(out[i].Host) {
 			continue
 		}
 		s, ok := samples[out[i].PID]

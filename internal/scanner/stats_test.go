@@ -500,3 +500,148 @@ func TestStatsTickRunsWhileAScanIsInFlight(t *testing.T) {
 	close(release)
 	<-scanDone
 }
+
+// A stats tick that runs after a bridge has swapped its rows in, but before
+// RemoteChanged has been called, must not swallow them.
+//
+// The tick used to rebuild the snapshot as l.local.Append(l.remoteRows()), so
+// it picked the new remote rows up as a side effect and committed them.
+// RemoteChanged then diffed against a snapshot that already carried them,
+// found nothing to do, and the remote host reached no subscriber at all —
+// while a later state.snapshot showed rows no delta had ever announced.
+func TestStatsTickDoesNotSwallowARemoteChange(t *testing.T) {
+	r := newStatsRig(t)
+	r.loop.opts.HostStats = fixedHost
+
+	var mu sync.Mutex
+	var remote state.Rows
+	r.loop.opts.Remote = func() state.Rows {
+		mu.Lock()
+		defer mu.Unlock()
+		return remote
+	}
+
+	r.loop.scanAndPublish(Include{Stats: true})
+	before := r.loop.Status().Seq
+
+	mu.Lock()
+	remote = state.Rows{
+		Ports: []state.Port{{
+			Port: 3000, BindAddress: "127.0.0.1", PID: 4242, Process: "node",
+			ExposedURLs: []string{}, Stats: &state.Stats{CPUPercent: 42},
+		}},
+		Hosts: []state.Host{{Name: state.LocalhostName, Status: state.HostConnected}},
+	}.Tag("hetzner").Normalize()
+	mu.Unlock()
+
+	// The tick lands in the window between the bridge's write and the call
+	// that is supposed to announce it.
+	r.loop.sampleStats(Include{Stats: true})
+	r.loop.RemoteChanged()
+
+	carried := 0
+	for _, p := range r.published() {
+		for _, row := range p.next.Ports {
+			if row.Host == "hetzner" {
+				carried++
+				break
+			}
+		}
+	}
+	if carried != 1 {
+		t.Fatalf("%d publishes carried the remote host's rows, want exactly 1", carried)
+	}
+	if after := r.loop.Status().Seq; after <= before {
+		t.Fatalf("seq = %d, want more than %d: the remote change took no sequence number", after, before)
+	}
+
+	// And what a new reader sees agrees with what was published.
+	snap := r.loop.CachedAll()
+	found := false
+	for _, row := range snap.Ports {
+		if row.Host == "hetzner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the cached snapshot lost the remote rows a delta announced")
+	}
+}
+
+// A bridge that connects before the daemon's first scan still reaches every
+// subscriber. RemoteChanged used to wake the loop and return, publishing
+// nothing, so the host appeared only when a scan happened to land.
+func TestRemoteChangedPublishesBeforeTheFirstScan(t *testing.T) {
+	r := newStatsRig(t)
+	r.loop.opts.HostStats = fixedHost
+	r.loop.opts.Remote = func() state.Rows {
+		return state.Rows{
+			Hosts: []state.Host{{Name: state.LocalhostName, Status: state.HostConnected}},
+		}.Tag("hetzner").Normalize()
+	}
+
+	r.loop.RemoteChanged()
+
+	if got := r.loop.Status().Seq; got == 0 {
+		t.Fatal("a remote host that connected before the first scan published nothing")
+	}
+	seen := r.published()
+	if len(seen) != 1 {
+		t.Fatalf("%d publishes, want 1", len(seen))
+	}
+	names := map[string]bool{}
+	for _, h := range seen[0].next.Hosts {
+		names[h.Name] = true
+	}
+	if !names["hetzner"] || !names[state.LocalhostName] {
+		t.Errorf("published hosts = %v, want localhost and the remote", names)
+	}
+	// The scan that follows must still publish this machine's ports.
+	r.loop.scanAndPublish(Include{})
+	if got := len(r.published()); got != 2 {
+		t.Errorf("%d publishes after the first scan, want 2", got)
+	}
+	if got := len(r.loop.Cached().Ports); got == 0 {
+		t.Error("the first scan after a pre-scan RemoteChanged published no local ports")
+	}
+}
+
+// The invariant behind the two tests above, asserted directly: the loop never
+// commits a snapshot it did not publish. A cached snapshot that differs from
+// the last delta is how a change goes missing — the next comparison is made
+// against state nobody was told about, so whatever produced it decides there
+// is nothing to announce.
+func TestStatsTickCommitsNothingItDidNotPublish(t *testing.T) {
+	r := newStatsRig(t)
+	r.loop.opts.HostStats = fixedHost
+	// A clock that moves a second per read, so a snapshot committed without
+	// being published is visible as a timestamp no delta carried. With a real
+	// clock three ticks land inside one RFC3339 second and the difference
+	// hides.
+	var clockMu sync.Mutex
+	tick := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	r.loop.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		tick = tick.Add(time.Second)
+		return tick
+	}
+	fixed := map[int]ports.ProcSample{
+		100: {CPUPercent: 1, MemoryRSS: 1 << 20, ThreadCount: 4, State: "running", Uptime: "1s"},
+		200: {CPUPercent: 2, MemoryRSS: 2 << 20, ThreadCount: 9, State: "running", Uptime: "1s"},
+	}
+	r.loop.opts.SampleStats = func([]int) map[int]ports.ProcSample { return fixed }
+
+	r.loop.scanAndPublish(Include{Stats: true})
+	r.loop.sampleStats(Include{Stats: true}) // settles the scan's stats onto the sampler's
+
+	for i := 0; i < 3; i++ {
+		r.loop.sampleStats(Include{Stats: true})
+		seen := r.published()
+		last := seen[len(seen)-1].next
+		if got := r.loop.CachedAll(); !reflect.DeepEqual(got, last) {
+			t.Fatalf("tick %d cached a snapshot no delta carried:\n cached    at=%s seq=%d\n published at=%s seq=%d",
+				i+1, got.At, got.Seq, last.At, last.Seq)
+		}
+	}
+}

@@ -607,9 +607,14 @@ func (l *Loop) commitScan(
 // local machine a diff and a marshal rather than a full port scan.
 //
 // It takes scanMu like a scan does, so its publish cannot interleave with one
-// and delta seq order stays publish order (contract §38). Before the first
-// local scan there is nothing to merge into, so it wakes the loop instead and
-// the remote rows ride out with the first tick.
+// and delta seq order stays publish order (contract §38).
+//
+// Before the first local scan it publishes against the identity-only snapshot
+// CachedAll synthesises rather than declining to publish. Waking the loop and
+// leaving the rows for the first tick looked equivalent and was not: a bridge
+// that connects in that window reaches no subscriber until a scan lands, and
+// nothing tells the subscriber a host appeared. It still wakes the loop, so
+// the local half follows.
 func (l *Loop) RemoteChanged() {
 	l.scanMu.Lock()
 	defer l.scanMu.Unlock()
@@ -618,9 +623,15 @@ func (l *Loop) RemoteChanged() {
 
 	l.mu.Lock()
 	if !l.haveSnap {
-		l.mu.Unlock()
-		l.Wake()
-		return
+		// The same base CachedAll serves before the first scan, so what a
+		// subscriber is told and what a new subscriber reads agree.
+		l.local = state.Rows{Hosts: []state.Host{l.identityRow()}}.Normalize()
+		l.snap = l.local.Into(state.Snapshot{
+			At:            l.now().Format(time.RFC3339),
+			DaemonVersion: l.opts.DaemonVersion,
+		})
+		l.haveSnap = true
+		defer l.Wake()
 	}
 	prev := l.snap
 	next := l.local.Append(l.remoteRows()).Into(state.Snapshot{

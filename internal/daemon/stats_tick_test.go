@@ -157,3 +157,70 @@ func drain(ctx context.Context, c *testClient) {
 		}
 	}
 }
+
+// The stats tick runs on its own clock, so it lands in the window between a
+// bridge swapping its rows in and RemoteChanged announcing them. The remote
+// host must be published exactly once, with a seq of its own, and the daemon's
+// cached snapshot must agree with what went out.
+func TestStatsTickBetweenARemoteChangeAndItsPublish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := newHarness(t, ctx)
+	h.setRows(statsRows()...)
+	h.statsMove.Store(true)
+
+	src := &remoteSource{}
+	h.loop.SetRemote(src.get)
+
+	c := h.dial(ctx)
+	c.subscribeAndSettle(rpc.StateSubscribeParams{
+		Include: rpc.Include{"stats"}, Hosts: []string{"*"},
+	})
+
+	// The bridge writes, then at least one stats tick runs before the call
+	// that is supposed to announce it.
+	before := h.sampleN.Load()
+	src.set(remoteRows("hetzner", 3000))
+	deadline := time.Now().Add(5 * time.Second)
+	for h.sampleN.Load() < before+2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.sampleN.Load() < before+2 {
+		t.Fatal("no stats tick ran in the window; the test proved nothing")
+	}
+	h.loop.RemoteChanged()
+
+	// Read a few seconds of deltas and count the ones announcing the host.
+	announced, last := 0, uint64(0)
+	for i := 0; i < 5; i++ {
+		d := c.nextDelta()
+		if d.Seq <= last {
+			t.Fatalf("delta seq %d after %d: publish order is not seq order", d.Seq, last)
+		}
+		last = d.Seq
+		for _, p := range d.Ports.Added {
+			if p.Host == "hetzner" && p.Port == 3000 {
+				announced++
+			}
+		}
+	}
+	if announced != 1 {
+		t.Fatalf("the remote host was announced %d times, want exactly 1", announced)
+	}
+
+	// And a reader that arrives now sees what the stream said.
+	var snap state.Snapshot
+	if e := c.call("state.snapshot", map[string]any{"hosts": []string{"*"}}, &snap); e != nil {
+		t.Fatalf("state.snapshot: %v", e)
+	}
+	found := false
+	for _, p := range snap.Ports {
+		if p.Host == "hetzner" && p.Port == 3000 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the snapshot lost the remote row the stream announced")
+	}
+}
