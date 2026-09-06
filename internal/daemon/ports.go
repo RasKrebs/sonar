@@ -50,22 +50,31 @@ func readPorts(rt *Runtime, include scanner.Include) ([]state.Port, error) {
 	return snap.Ports, nil
 }
 
-// cacheCovers reports whether the cached snapshot already carries the
+// cacheCovers reports whether the cached snapshot was collected with the
 // enrichments this read asked for. An empty port table trivially covers
 // everything: there is nothing to enrich.
+//
+// The question is about the snapshot, not about every row in it, and asking it
+// row by row was wrong. `stats` is null for a process whose numbers are all
+// zero — a listener ps cannot see, a container the daemon has no reading for —
+// and `health` is null for anything that was not probed, which on a machine
+// with one such row made *every* stats read miss the cache and scan the
+// machine again, while a subscriber was already collecting stats every second
+// (contract §42, §44). One row carrying the enrichment is what says the scan
+// behind this snapshot collected it.
 func cacheCovers(snap state.Snapshot, include scanner.Include) bool {
 	if !include.Stats && !include.Health {
 		return true
 	}
-	for i := range snap.Ports {
-		if include.Stats && snap.Ports[i].Stats == nil {
-			return false
-		}
-		if include.Health && snap.Ports[i].Health == nil {
-			return false
-		}
+	if len(snap.Ports) == 0 {
+		return true
 	}
-	return true
+	stats, health := false, false
+	for i := range snap.Ports {
+		stats = stats || snap.Ports[i].Stats != nil
+		health = health || snap.Ports[i].Health != nil
+	}
+	return (!include.Stats || stats) && (!include.Health || health)
 }
 
 func handlePortsList(_ context.Context, req *Request) (any, error) {
