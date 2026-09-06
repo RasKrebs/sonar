@@ -120,6 +120,13 @@ func (l *Lock) Path() string { return l.path }
 // ErrAlreadyRunning, so they are retried here instead of aborting the restart.
 func WaitForLockRelease(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	// Asking whether the holder is alive costs a `tasklist` process on Windows,
+	// so it is rate-limited well below the poll: the lock itself is the fast
+	// answer, and a recorded holder that is already gone can wait half a second
+	// to be noticed.
+	const livenessEvery = 500 * time.Millisecond
+	checkLivenessAt := time.Now()
+
 	var last error
 	for {
 		lock, err := AcquireLock(path)
@@ -134,8 +141,11 @@ func WaitForLockRelease(path string, timeout time.Duration) error {
 		}
 		last = err
 		var already *ErrAlreadyRunning
-		if errors.As(err, &already) && already.PID > 0 && !runs.PIDAlive(already.PID) {
-			return nil
+		if errors.As(err, &already) && already.PID > 0 && !time.Now().Before(checkLivenessAt) {
+			checkLivenessAt = time.Now().Add(livenessEvery)
+			if !runs.PIDAlive(already.PID) {
+				return nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return fmt.Errorf("the previous daemon still holds %s after %s: %w", path, timeout, last)
