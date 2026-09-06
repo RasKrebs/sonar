@@ -298,12 +298,18 @@ sonar kill -g my-app                       # a whole group, confirms unless -y
 sonar kill --all --filter docker -y        # every container publishing a port
 sonar kill --all --project my-app          # one Compose project
 sonar kill 3000 --ip 127.0.0.1             # one bind address of several
+sonar kill --all --dry-run --json          # the plan for the whole machine
 ```
 
-Show the plan and change nothing:
+`--dry-run` takes any selector and changes nothing: it prints the actions the
+kill would take, children first, and leaves everything running. End to end,
+against a listener of your own:
 
 ```sh
-sonar kill --all --dry-run --json
+sonar start --detach --name plan --port 8231 -- sonar map 3000 8231
+sonar wait 8231
+sonar kill 8231 --dry-run --json           # the plan; the mapping keeps running
+sonar kill 8231 -y                         # and now for real
 # check
 ```
 
