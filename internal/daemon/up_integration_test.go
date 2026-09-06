@@ -123,7 +123,7 @@ services:
 
 	// api only started once db was listening, so by now all three are up and
 	// the group is running.
-	waitForGroupStatus(t, e, "demo", "running", 45*time.Second)
+	waitForGroupStatus(t, e, project, "demo", "running", 45*time.Second)
 
 	tree := e.command("list", "--tree")
 	tree.Dir = project
@@ -247,15 +247,25 @@ func keys(m map[int]bool) []int {
 	return out
 }
 
-// waitForGroupStatus polls `sonar groups --json` until the named group reaches
-// a status.
-func waitForGroupStatus(t *testing.T, e *env, name, want string, timeout time.Duration) {
+// waitForGroupStatus polls `sonar groups --json` from inside the project until
+// the named group reaches the wanted status.
+//
+// It runs in the project directory on purpose: `sonar groups` is a direct-scan
+// command, and the only directories it indexes are the caller's own and the
+// working directories of the processes it scanned. The second half does not
+// exist on Windows — there is no per-process cwd the scanner can read — so
+// asking from somewhere else is asking a question the command cannot answer
+// there.
+func waitForGroupStatus(t *testing.T, e *env, dir, name, want string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	var last string
+	var last, lastOut string
+	var lastErr error
 	for time.Now().Before(deadline) {
 		cmd := e.command("groups", "--json")
+		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
+		lastOut, lastErr = string(out), err
 		if err == nil {
 			var rows []struct {
 				Name   string `json:"name"`
@@ -274,7 +284,32 @@ func waitForGroupStatus(t *testing.T, e *env, name, want string, timeout time.Du
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	reportGroupDiagnostics(t, e, dir, lastOut, lastErr)
 	t.Fatalf("group %s never reached status %q (last saw %q)", name, want, last)
+}
+
+// reportGroupDiagnostics dumps everything that decides a group before the test
+// fails on it: what `sonar groups` last said, the runs the daemon registered,
+// the mirrored registry the direct scan reads, and the ports with the three
+// fields attribution turns on. A group missing on one platform is either a
+// missing cwd, a missing run record or a missing config, and this says which.
+func reportGroupDiagnostics(t *testing.T, e *env, dir, lastOut string, lastErr error) {
+	t.Helper()
+	t.Logf("last `sonar groups --json` (err %v):\n%s", lastErr, lastOut)
+
+	for _, args := range [][]string{{"runs", "--json"}, {"list", "--json"}} {
+		cmd := e.command(args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		t.Logf("`sonar %s` (err %v):\n%s", strings.Join(args, " "), err, out)
+	}
+
+	registry := filepath.Join(e.home, ".config", "sonar", "runs.json")
+	if data, err := os.ReadFile(registry); err == nil {
+		t.Logf("%s:\n%s", registry, data)
+	} else {
+		t.Logf("%s could not be read: %v", registry, err)
+	}
 }
 
 // unusedPort is freePort plus the check freePort cannot make: that nothing is
