@@ -35,7 +35,30 @@ func diff(prev, next Snapshot, withStats bool) Delta {
 		Sessions: diffKeyed(prev.Sessions, next.Sessions,
 			func(s SessionRecord) string { return s.ID },
 			func(a, b SessionRecord) bool { return reflect.DeepEqual(a, b) }),
+		Hosts: DiffHosts(prev.Hosts, next.Hosts),
 	}
+}
+
+// DiffHosts is the `hosts` collection's diff, keyed by name. It is exported
+// because the scanner asks the same question on its own — "did only the
+// machine's load move?" — when it decides whether a tick is worth publishing.
+func DiffHosts(prev, next []Host) Change[Host] {
+	return diffKeyed(prev, next, func(h Host) string { return h.Name }, hostsEqual)
+}
+
+// hostsEqual decides whether a host row changed. Host load is state, not an
+// opt-in statistic: it is compared the same way for Diff and DiffWithStats, so
+// a subscriber that asked for neither stats nor health still sees the machine's
+// cpu and memory move (contract §22's rule for configured health).
+//
+// LastSeen and LatencyMs are excluded for the reason §25 excludes health
+// latency: both move on every tick by construction, and comparing them would
+// publish a `hosts` delta forever on a machine where nothing is happening. The
+// newest values still ride out with the next real change.
+func hostsEqual(a, b Host) bool {
+	a.LastSeen, b.LastSeen = "", ""
+	a.LatencyMs, b.LatencyMs = 0, 0
+	return reflect.DeepEqual(a, b)
 }
 
 // diffPorts keys ports by Key() and treats a PID change as remove + add.

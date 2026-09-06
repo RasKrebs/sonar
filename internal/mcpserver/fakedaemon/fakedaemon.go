@@ -306,6 +306,7 @@ func completeDelta(d state.Delta) state.Delta {
 	d.Tunnels = completeChange(d.Tunnels)
 	d.Proxies = completeChange(d.Proxies)
 	d.Sessions = completeChange(d.Sessions)
+	d.Hosts = completeChange(d.Hosts)
 	return d
 }
 

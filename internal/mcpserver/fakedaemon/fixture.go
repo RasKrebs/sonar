@@ -15,6 +15,7 @@ type Fixture struct {
 	Ports         []state.Port
 	Groups        []state.Group
 	Sessions      []state.SessionRecord
+	Hosts         []state.Host
 }
 
 // FixtureTime is the instant every fixture pretends it is.
@@ -33,7 +34,24 @@ func DefaultFixture() Fixture {
 		Ports:        DefaultPorts(),
 		Groups:       DefaultGroups(),
 		Sessions:     DefaultSessions(),
+		Hosts:        DefaultHosts(),
 	}
+}
+
+// DefaultHosts is the fixture's `hosts` collection: the one row every daemon
+// publishes for the machine it runs on, with the load of a developer laptop
+// halfway through a working day.
+func DefaultHosts() []state.Host {
+	return []state.Host{{
+		Name: state.LocalhostName, Address: state.LocalhostName,
+		Status: state.HostConnected, DaemonVersion: "0.5.1", ProtocolVersion: "1.0.0",
+		LatencyMs: 0, OS: "linux", Arch: "amd64", Kernel: "6.8.0-40-generic",
+		UptimeS: i64p(93_600), CPUPercent: f64p(12.4),
+		Load:       []float64{1.24, 0.98, 0.71},
+		MemoryUsed: i64p(9 << 30), MemoryTotal: i64p(32 << 30),
+		DiskUsed: i64p(412 << 30), DiskTotal: i64p(931 << 30), DiskPath: "/",
+		Ports: 6, Groups: 2, LastSeen: FixtureTime,
+	}}
 }
 
 // DefaultPorts is the fixture's port table, sorted by port the way a scan
@@ -177,6 +195,10 @@ func ManyPorts(n int) []state.Port {
 }
 
 func strp(s string) *string { return &s }
-func intp(i int) *int       { return &i }
+
+func i64p(v int64) *int64 { return &v }
+
+func f64p(v float64) *float64 { return &v }
+func intp(i int) *int         { return &i }
 
 func srcp(s state.GroupSource) *state.GroupSource { return &s }
