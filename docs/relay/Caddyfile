@@ -1,0 +1,13 @@
+# TLS termination for the sonar relay. Caddy fetches and renews the
+# certificate itself, so there is no certificate step in the deploy.
+{$RELAY_DOMAIN} {
+	encode zstd gzip
+
+	# The relay caps bodies at 256 KB and returns 413; refusing them here too
+	# means an oversized upload never reaches the Go process at all.
+	request_body {
+		max_size 256KB
+	}
+
+	reverse_proxy relay:8787
+}

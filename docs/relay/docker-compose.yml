@@ -1,0 +1,42 @@
+# A self-hosted sonar relay behind Caddy, on one box.
+#
+# Both values come from a .env file next to this one:
+#
+#   RELAY_DOMAIN=relay.example.com
+#   RELAY_KEY=<openssl rand -hex 24>
+#
+# Caddy is the only thing on a host port; the relay is reachable on the
+# compose network and nowhere else, which is what lets it keep binding all
+# interfaces without being on the internet in the clear.
+services:
+  relay:
+    image: ghcr.io/raskrebs/sonar-relay:latest
+    restart: unless-stopped
+    environment:
+      SONAR_RELAY_LISTEN: ":8787"
+      SONAR_RELAY_DB: "/data/relay.db"
+      SONAR_RELAY_PROJECT_KEYS: "${RELAY_KEY:?set RELAY_KEY in .env to a secret from openssl rand -hex 24}"
+      SONAR_RELAY_RETENTION_DAYS: "90"
+    volumes:
+      # A named volume, so it is already owned by the image's uid 65532.
+      - relay-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RELAY_DOMAIN: "${RELAY_DOMAIN:?set RELAY_DOMAIN in .env to the name that points at this box}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

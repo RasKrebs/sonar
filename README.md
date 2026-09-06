@@ -662,6 +662,26 @@ Until the app ships, macOS release tarballs still carry the old `sonar-tray`
 menu bar binary, and `sonar tray` falls back to it when the app is not
 installed.
 
+### `sonar relay`
+
+The relay is the server side of sonar: one small HTTP service, run by us for
+the hosted app and published as `ghcr.io/raskrebs/sonar-relay` so you can run
+your own. It has nothing to do with the local daemon — `sonar serve` watches
+your ports, `sonar relay serve` answers HTTP for a fleet — and it ships in the
+same binary only so there is one artefact to deploy.
+
+Today it collects anonymous product telemetry: a batch of named events per
+install, no paths, no hostnames, no URLs, refused at the door if a value even
+looks like one. It is the same service that will later terminate exposed
+tunnels and hold sign-in.
+
+```sh
+sonar relay serve --db ./relay.db --project-keys "$(openssl rand -hex 24)"
+```
+
+`docs/RELAY.md` has the routes, the exact validation rules, the storage schema
+and a one-command deploy behind Caddy on any box with Docker.
+
 ## Moving from the old commands
 
 The pre-group commands still work and print a single line on stderr saying what
