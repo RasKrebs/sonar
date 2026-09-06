@@ -16,6 +16,7 @@ import (
 	"github.com/raskrebs/sonar/internal/docker"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/state"
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 // This file exercises the killer against real processes: a shell that spawns a
@@ -34,12 +35,14 @@ const (
 
 // TestMain doubles as the helper process: re-executing the test binary with
 // SONAR_KILLER_HELPER_PORT set turns it into a listener instead of a test run.
+// A helper is not a test run, so it is not the thing testenv isolates — it
+// inherits the environment its parent was already isolated into.
 func TestMain(m *testing.M) {
 	if port := os.Getenv(envHelperPort); port != "" {
 		runHelper(port, os.Getenv(envHelperChild), os.Getenv(envHelperIgnore) != "")
 		return
 	}
-	os.Exit(m.Run())
+	os.Exit(testenv.Run(m))
 }
 
 // runHelper listens on port, optionally spawns a child helper on childPort, and

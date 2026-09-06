@@ -175,6 +175,9 @@ const template = `# sonar configuration
 #                  (default: what 'sonar daemon path' prints)
 #   SONAR_NO_HINTS set to 1 to silence the migration notices the renamed
 #                  commands print
+#   SONAR_NO_AUTOSTART
+#                  set to 1 to stop clients starting a daemon that is not
+#                  already running; they report it as unavailable instead
 `
 
 // WriteTemplate writes a commented starter config to Path(), creating the

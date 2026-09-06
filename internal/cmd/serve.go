@@ -41,6 +41,10 @@ func init() {
 }
 
 func serveRun(cmd *cobra.Command, _ []string) error {
+	if err := refuseTestBinaryDaemon(); err != nil {
+		return err
+	}
+
 	socket := daemon.SocketPath()
 
 	if serveDetach {
@@ -79,6 +83,24 @@ func serveRun(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+// refuseTestBinaryDaemon stops a Go test binary from becoming the daemon.
+//
+// `go test` links a package into <pkg>.test, and Go's flag parser stops at the
+// first non-flag argument — so `cmd.test serve --detach` silently ignores both
+// words and runs the entire test suite in the background against the config
+// directory it inherited. Every such process is a stray test run holding the
+// user's real ~/.config/sonar open, not a daemon (step 1A.20). Both entry
+// points are covered: `serve` refuses here, and `serve --detach` re-execs this
+// same binary, so it never gets far enough to fork.
+func refuseTestBinaryDaemon() error {
+	exe, err := os.Executable()
+	if err != nil || !daemon.IsTestBinary(exe) || daemon.TestDaemonAllowed() {
+		return nil
+	}
+	return fmt.Errorf("refusing to run %s as the sonar daemon: it is a Go test binary, so this would re-run the test suite rather than serve\nhint: start a daemon in-process from the test, or set %s=1 if you really mean it",
+		filepath.Base(exe), daemon.AllowTestDaemonEnv)
 }
 
 // detachDaemon re-execs this binary as a background `sonar serve` and waits for

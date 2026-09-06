@@ -28,6 +28,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/raskrebs/sonar/internal/state"
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 func TestRealDaemonToolsList(t *testing.T) {
@@ -270,7 +271,8 @@ func TestSocketFlagOverridesTheEnvironment(t *testing.T) {
 	cmd := exec.Command(e.bin, "mcp", "--socket", e.socket, "--log-level", "debug")
 	// SONAR_SOCKET is deliberately absent: only the flag says where to dial.
 	cmd.Env = append(os.Environ(),
-		"HOME="+e.home, "USERPROFILE="+e.home, "XDG_RUNTIME_DIR=", "SONAR_NO_HINTS=1")
+		"HOME="+e.home, "USERPROFILE="+e.home, "XDG_RUNTIME_DIR=", "SONAR_NO_HINTS=1",
+		"SONAR_DB=", testenv.ChildEnv())
 	cmd.Stderr = &stderrSink{e: e}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "sonar-itest", Version: "1"}, nil)
@@ -330,6 +332,13 @@ func (e *realEnv) env() []string {
 		"XDG_RUNTIME_DIR=",
 		"SONAR_SOCKET="+e.socket,
 		"SONAR_NO_HINTS=1",
+		// The test binary is isolated with one SONAR_DB for the whole run
+		// (internal/testenv); clear it so this env's daemon keeps its rows
+		// under this env's HOME.
+		"SONAR_DB=",
+		// `sonar mcp` autostarting a daemon of its own is the thing these
+		// tests are here to exercise.
+		testenv.ChildEnv(),
 	)
 }
 
