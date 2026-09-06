@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/raskrebs/sonar/internal/daemon/client"
@@ -61,7 +62,7 @@ func upRun(cmd *cobra.Command, args []string) error {
 	var start rpc.GroupsStartResult
 	stream, err := c.Stream(cmd.Context(), "groups.start", params, &start)
 	if err != nil {
-		return upError(args, err)
+		return upError(cmd, args, err)
 	}
 	defer stream.Close()
 
@@ -168,26 +169,34 @@ func printStartSummary(end rpc.GroupsStartEnd) {
 	fmt.Printf("\n%s\n", display.Dim(strings.Join(parts, ", ")))
 }
 
-// upError adds the one-line notice for the old `sonar up <profile>`: profiles
+// upError adds the migration notice for the old `sonar up <profile>`: profiles
 // are gone from this command, and someone whose muscle memory still types it
 // should be told where they went rather than just "no group".
-func upError(args []string, err error) error {
+//
+// It goes through Hint, the one notice mechanism the aliases share (§23), so it
+// is a single stderr line, printed at most once, and silenced by --json and by
+// SONAR_NO_HINTS like every other migration notice.
+func upError(cmd *cobra.Command, args []string, err error) error {
 	out := daemonError(err)
 	var re *rpc.Error
 	if len(args) != 1 || !errors.As(err, &re) || re.Data.Code != "not_found" {
 		return out
 	}
-	names, lerr := profile.List()
-	if lerr != nil {
-		return out
-	}
-	for _, name := range names {
-		if name == args[0] {
-			return fmt.Errorf("%w\nnote: %q is a profile. `sonar up` now starts a group from its %s; `sonar profile show %s` still lists the profile",
-				out, args[0], groups.ConfigName, args[0])
-		}
+	if hasProfile(args[0]) {
+		Hint(cmd, HintUpProfile(args[0]))
 	}
 	return out
+}
+
+// hasProfile reports whether a name still exists as a profile. An unreadable
+// profile directory is simply "no profile": the notice is a courtesy, not a
+// reason to fail differently.
+func hasProfile(name string) bool {
+	names, err := profile.List()
+	if err != nil {
+		return false
+	}
+	return slices.Contains(names, name)
 }
 
 // shortPath renders a path under the home directory as ~/….

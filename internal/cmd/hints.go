@@ -52,7 +52,8 @@ func HintsDisabled() bool {
 // Hint prints one migration notice for cmd, unless the invocation is producing
 // JSON, the environment silenced hints, or a notice was already printed.
 //
-// 1A.7's `sonar up` calls this as Hint(cmd, HintUpProfile(name)).
+// `sonar up` calls it as Hint(cmd, HintUpProfile(name)) when the group it could
+// not find is still a profile.
 func Hint(cmd *cobra.Command, msg string) {
 	if msg == "" || HintsDisabled() || jsonRequested(cmd) {
 		return
@@ -113,9 +114,10 @@ func HintProfileToConfig(name string) string {
 		groups.ConfigName, name, groups.ConfigName)
 }
 
-// HintUpProfile is the notice `sonar up <profile>` prints while it still
-// accepts a profile name. Owned here so step 1A.7's rewrite of up.go can call
-// it without re-deciding the wording.
+// HintUpProfile is the notice `sonar up <profile>` prints when the name it was
+// given is not a group but is still a profile. up.go reaches it through Hint,
+// so it obeys the same one-line, --json and SONAR_NO_HINTS rules as every other
+// notice here.
 func HintUpProfile(name string) string {
 	if name == "" {
 		name = "<name>"
