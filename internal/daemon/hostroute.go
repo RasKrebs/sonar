@@ -123,7 +123,7 @@ var hostRoutes = map[string]hostRoute{
 	"runs.spawn":        {portKeys: true},
 }
 
-// unroutableMethods never take a host.
+// unroutable reports the methods that never take a host.
 //
 // `state.*` has its own, richer host selection (`{hosts: [...]}`, §39) and is
 // the one place a client sees several machines at once. `stream.cancel` is
@@ -423,15 +423,18 @@ func relayStream(ctx context.Context, req *Request, host, method string, reply j
 			}
 		}()
 
+		// Every chunk is read, whatever happens to the sending half: the far
+		// side's end is only delivered once its chunks have been, so a relay
+		// that stopped draining would never learn that the stream is over.
+		// A cancelled stream, and one whose client has gone, simply stop
+		// forwarding what they still read.
+		stopped := false
 		for chunk := range remote.Chunks() {
-			if ctx.Err() != nil {
-				// Cancelled: drain what is still in flight so the far side's
-				// end is read, but stop pushing it at a client that asked to
-				// stop.
+			if stopped || ctx.Err() != nil {
 				continue
 			}
 			if err := s.Send(json.RawMessage(retagResult(method, host, chunk))); err != nil {
-				break
+				stopped = true
 			}
 		}
 		close(relayed)
