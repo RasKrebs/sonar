@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -262,8 +261,8 @@ func readHTTPBody(conn net.Conn) ([]byte, error) {
 func allContainerStatsCLI() map[string]*ContainerStats {
 	result := make(map[string]*ContainerStats)
 
-	out, err := exec.Command("docker", "stats", "--no-stream", "--format",
-		"{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}").Output()
+	out, err := output("stats", "--no-stream", "--format",
+		"{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}")
 	if err != nil {
 		return result
 	}
@@ -301,7 +300,7 @@ func allContainerStatsCLI() map[string]*ContainerStats {
 	}
 	if len(names) > 0 {
 		args := append([]string{"inspect", "--format", "{{.Name}}\t{{.State.Status}}\t{{.State.StartedAt}}"}, names...)
-		inspectOut, err := exec.Command("docker", args...).Output()
+		inspectOut, err := output(args...)
 		if err == nil {
 			inspectScanner := bufio.NewScanner(strings.NewReader(strings.TrimSpace(string(inspectOut))))
 			for inspectScanner.Scan() {
@@ -378,7 +377,9 @@ func formatContainerDuration(d time.Duration) string {
 
 // StopContainer stops a Docker container by name using `docker stop`.
 func StopContainer(name string) error {
-	if err := exec.Command("docker", "stop", name).Run(); err != nil {
+	cmd, stop := cli("stop", name)
+	defer stop()
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to stop container %s: %w", name, err)
 	}
 	return nil
@@ -388,7 +389,7 @@ func StopContainer(name string) error {
 func listContainers() ([]container, error) {
 	format := "{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Label \"com.docker.compose.service\"}}" +
 		"\t{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.project.working_dir\"}}"
-	out, err := exec.Command("docker", "ps", "--format", format).Output()
+	out, err := output("ps", "--format", format)
 	if err != nil {
 		return nil, err
 	}

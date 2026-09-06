@@ -8,6 +8,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/ports"
+	"github.com/raskrebs/sonar/internal/scanner"
 	"github.com/raskrebs/sonar/internal/state"
 )
 
@@ -659,5 +660,34 @@ func TestDaemonStatusReportsTheScanCounter(t *testing.T) {
 	}
 	if after.Scans <= before.Scans {
 		t.Fatalf("scan counter did not move: %d then %d", before.Scans, after.Scans)
+	}
+}
+
+// TestCacheCoversAsksAboutTheSnapshotNotEveryRow is step 1A.19. `stats` is null
+// for a process whose numbers are all zero and `health` is null for anything
+// that was not probed, so asking row by row meant a single such row made every
+// stats read miss the cache and scan the machine again — while the loop was
+// already collecting stats every second for the subscriber that asked.
+func TestCacheCoversAsksAboutTheSnapshotNotEveryRow(t *testing.T) {
+	withStats := state.Snapshot{Ports: []state.Port{
+		{Port: 3000, Stats: &state.Stats{CPUPercent: 1}},
+		{Port: 3001},
+	}}
+	if !cacheCovers(withStats, scanner.Include{Stats: true}) {
+		t.Error("a snapshot with stats on one row does not cover a stats read")
+	}
+	if cacheCovers(withStats, scanner.Include{Health: true}) {
+		t.Error("a snapshot with no health anywhere covers a health read")
+	}
+
+	none := state.Snapshot{Ports: []state.Port{{Port: 3000}}}
+	if cacheCovers(none, scanner.Include{Stats: true}) {
+		t.Error("a snapshot with no stats anywhere covers a stats read")
+	}
+	if !cacheCovers(none, scanner.Include{}) {
+		t.Error("a read that asked for nothing is never uncovered")
+	}
+	if !cacheCovers(state.Snapshot{}, scanner.Include{Stats: true, Health: true}) {
+		t.Error("an empty port table should trivially cover everything")
 	}
 }

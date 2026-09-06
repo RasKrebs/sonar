@@ -343,7 +343,7 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 		ports.EnrichStats(results, docker.AllContainerStatsAsEntries())
 	}
 	if healthFlag {
-		ports.EnrichHealth(results, 2*time.Second)
+		ports.EnrichHealth(results, 2*time.Second, 0)
 	}
 	// Resolve every port's group: pin > run > .sonar.yaml > Compose > git root.
 	// This is the no-daemon path, so it happens per command.
