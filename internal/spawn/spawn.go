@@ -24,6 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/raskrebs/sonar/internal/state"
 )
 
 // Environment variables every child gets, so a tool that wants to know which
@@ -33,6 +35,12 @@ const (
 	EnvName     = "SONAR_NAME"
 	EnvRunID    = "SONAR_RUN_ID"
 	EnvPortHint = "SONAR_PORT"
+	// EnvSession and EnvSessionLabel re-export the agent session the caller
+	// captured, in the `<tool>:<id>` form spec 2 §3 defines. A `sonar start`
+	// nested inside this child therefore reads the session explicitly instead
+	// of detecting it again, and every run of one agent shares one id.
+	EnvSession      = "SONAR_SESSION"
+	EnvSessionLabel = "SONAR_SESSION_LABEL"
 )
 
 // Request is one command to start.
@@ -50,6 +58,11 @@ type Request struct {
 	Name  string
 	// PortHint is the port the command is expected to bind, or 0.
 	PortHint int
+	// Session is the agent session that asked for this run, captured by the
+	// caller (internal/sessions). Spawn only carries it: it puts SONAR_SESSION
+	// in the child's environment and hands it back on the Handle for the
+	// registry to store. The zero value means no session.
+	Session state.Session
 	// Detach runs the child in its own session with stdout and stderr in the
 	// run's log file, so it survives the process that started it.
 	Detach bool
@@ -76,6 +89,7 @@ type Handle struct {
 	StartedAt time.Time
 	LogPath   string
 	Detached  bool
+	Session   state.Session
 
 	cmd *exec.Cmd
 	log *os.File
@@ -117,6 +131,7 @@ func Spawn(ctx context.Context, req Request) (*Handle, error) {
 		PortHint:  req.PortHint,
 		StartedAt: time.Now(),
 		Detached:  req.Detach,
+		Session:   req.Session,
 	}
 
 	cmd := exec.Command(req.Argv[0], req.Argv[1:]...)
@@ -193,6 +208,10 @@ func childEnv(req Request, id string) []string {
 		base = os.Environ()
 	}
 	drop := map[string]bool{EnvGroup: true, EnvName: true, EnvRunID: true, EnvPortHint: true}
+	if req.Session.ID != "" {
+		drop[EnvSession] = true
+		drop[EnvSessionLabel] = true
+	}
 	out := make([]string, 0, len(base)+4)
 	for _, kv := range base {
 		if key, _, ok := strings.Cut(kv, "="); ok && drop[key] {
@@ -203,6 +222,12 @@ func childEnv(req Request, id string) []string {
 	out = append(out, EnvGroup+"="+req.Group, EnvName+"="+req.Name, EnvRunID+"="+id)
 	if req.PortHint > 0 {
 		out = append(out, EnvPortHint+"="+strconv.Itoa(req.PortHint))
+	}
+	if req.Session.ID != "" {
+		out = append(out, EnvSession+"="+req.Session.Tool+":"+req.Session.ID)
+		if req.Session.Label != "" {
+			out = append(out, EnvSessionLabel+"="+req.Session.Label)
+		}
 	}
 	return out
 }

@@ -2034,6 +2034,9 @@
         },
         "include": {
           "$ref": "#/definitions/Include"
+        },
+        "session": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -2488,6 +2491,9 @@
         "id": {
           "type": "string"
         },
+        "session": {
+          "$ref": "#/definitions/Session"
+        },
         "allow_outside_home": {
           "type": "boolean"
         }
@@ -2541,7 +2547,7 @@
           "type": "integer"
         },
         "session": {
-          "type": "string"
+          "$ref": "#/definitions/Session"
         },
         "allow_outside_home": {
           "type": "boolean"
