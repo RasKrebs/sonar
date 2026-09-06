@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
@@ -10,6 +11,26 @@ import (
 	"github.com/raskrebs/sonar/internal/scanner"
 	"github.com/raskrebs/sonar/internal/state"
 )
+
+// remoteSource is the scanner's Remote seam under a mutex: the scan goroutine
+// reads it while the test writes it, exactly as the real connection manager
+// does.
+type remoteSource struct {
+	mu   sync.Mutex
+	rows state.Rows
+}
+
+func (r *remoteSource) set(rows state.Rows) {
+	r.mu.Lock()
+	r.rows = rows
+	r.mu.Unlock()
+}
+
+func (r *remoteSource) get() state.Rows {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rows
+}
 
 // remoteRows is what a connected bridge contributes: rows already tagged with
 // the host name, plus that host's own row in the hosts collection.
@@ -111,8 +132,8 @@ func TestRemoteChangePublishesADelta(t *testing.T) {
 	defer cancel()
 	h := newHarness(t, ctx)
 
-	var rows state.Rows
-	h.loop.SetRemote(func() state.Rows { return rows })
+	src := &remoteSource{}
+	h.loop.SetRemote(src.get)
 	h.setRows(ports.ListeningPort{Port: 8080, BindAddress: "127.0.0.1", PID: 1, Process: "go"})
 
 	c := h.dial(ctx)
@@ -121,7 +142,7 @@ func TestRemoteChangePublishesADelta(t *testing.T) {
 		t.Fatalf("state.subscribe: %v", err)
 	}
 
-	rows = remoteRows("hetzner", 3000)
+	src.set(remoteRows("hetzner", 3000))
 	h.loop.RemoteChanged()
 
 	for {
@@ -148,8 +169,8 @@ func TestRemoteRowsAreInvisibleToALocalSubscriber(t *testing.T) {
 	defer cancel()
 	h := newHarness(t, ctx)
 
-	var rows state.Rows
-	h.loop.SetRemote(func() state.Rows { return rows })
+	src := &remoteSource{}
+	h.loop.SetRemote(src.get)
 	h.setRows(ports.ListeningPort{Port: 8080, BindAddress: "127.0.0.1", PID: 1, Process: "go"})
 
 	c := h.dial(ctx)
@@ -159,7 +180,7 @@ func TestRemoteRowsAreInvisibleToALocalSubscriber(t *testing.T) {
 	}
 
 	before := h.srv.loop.Status().Seq
-	rows = remoteRows("hetzner", 3000)
+	src.set(remoteRows("hetzner", 3000))
 	h.loop.RemoteChanged()
 	if after := h.srv.loop.Status().Seq; after == before {
 		t.Fatal("the remote change did not publish at all")

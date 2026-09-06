@@ -431,9 +431,9 @@ The daemon measures its own machine on the scan cadence and publishes it as the
 percent, load average, memory and the disk holding `/`. CPU percent is the work
 done between two scans, so it is null until the daemon has scanned twice; a
 figure a platform cannot produce — the load average on Windows, which has none —
-is null rather than zero. Registered remote hosts join the same table in
-milestone 3. The command needs a running daemon: it is the daemon that holds the
-previous sample a percentage is measured against.
+is null rather than zero. Every host registered with `sonar remote add` joins
+the same table with its own load. The command needs a running daemon: it is the
+daemon that holds the previous sample a percentage is measured against.
 
 ### `sonar remote install`
 
@@ -458,6 +458,40 @@ the daemon, which is what makes an install and an update the same command.
 The target goes to `ssh` untouched: a `Host` alias from `~/.ssh/config` works,
 and so do the `ProxyJump`, `IdentityFile` and `Port` it sets. `--identity` and
 `--ssh-arg` are there for the flags a config does not cover.
+
+### `sonar remote`
+
+```sh
+sonar remote add deploy@203.0.113.7            # name taken from the target
+sonar remote add hetzner deploy@203.0.113.7    # or given
+sonar remote list                              # status, latency, version, load
+sonar remote remove hetzner
+
+sonar list --host hetzner                      # that host's ports
+sonar info 3000 --host hetzner
+```
+
+A registered host runs the same daemon, and the daemon on this machine keeps
+one SSH connection to it — `ssh <target> sonar daemon stdio` — and multiplexes
+what it reports into the state every client already reads. Nothing new listens
+anywhere: the remote daemon's socket stays private to the SSH user, and clients
+never speak SSH themselves.
+
+Every row now carries the host it came from. Local rows say `localhost` and
+keep the keys they always had, so nothing that reads sonar today changes;
+remote rows say the registered name and are keyed `<host>/<port>:<bind>`, which
+is what lets port 3000 on two machines be two rows. A subscriber sees only
+localhost unless it asks for more (`state.subscribe {"hosts": ["*"]}`).
+
+The target goes to `ssh` untouched, so `~/.ssh/config` aliases, `ProxyJump` and
+identities all apply; `--ssh-arg`, `--identity` and `--port` cover what a config
+does not. sonar stores no password and no key. A host that goes away keeps its
+row and its status while the daemon retries, backing off from one second to
+thirty for as long as it stays registered.
+
+`--host` also still takes a bare `user@host` that sonar knows nothing about: it
+falls back to the agentless `ssh` + `ss`/`lsof` scan and prints a hint to
+`sonar remote install`.
 
 ### The daemon
 
