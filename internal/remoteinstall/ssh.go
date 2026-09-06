@@ -3,12 +3,14 @@ package remoteinstall
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -98,6 +100,71 @@ func (r runner) stream(ctx context.Context, remoteCmd string, stdin io.Reader, o
 	if err := cmd.Wait(); err != nil {
 		return sshError(r.target, err, stderr.String())
 	}
+	return nil
+}
+
+// stdio runs a remote command and hands back its stdin and stdout as one
+// stream, which is what a JSON-RPC session over ssh is. It is the same shape
+// internal/remote's bridge dials; this one lives for a single handshake.
+//
+// Closing the stream closes the far side's stdin and, if that is not taken as a
+// hint, kills the ssh process.
+func (r runner) stdio(ctx context.Context, remoteCmd string) (io.ReadWriteCloser, error) {
+	cmd := r.command(ctx, remoteCmd)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, fmt.Errorf("running ssh: %w", err)
+	}
+	return &stdioSession{cmd: cmd, in: stdin, out: stdout, errs: &stderr, target: r.target}, nil
+}
+
+// stdioSession is one `ssh <target> sonar daemon stdio` seen as a stream.
+type stdioSession struct {
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	out    io.ReadCloser
+	errs   *bytes.Buffer
+	target string
+	once   sync.Once
+}
+
+func (s *stdioSession) Read(b []byte) (int, error) {
+	n, err := s.out.Read(b)
+	if errors.Is(err, io.EOF) {
+		// The far side hanging up is only the whole story when ssh and the
+		// remote shell had nothing to say. When they did — "command not
+		// found", "Permission denied" — that is the diagnosis.
+		if msg := firstErrorLine(s.errs.String()); msg != "" {
+			return n, sshError(s.target, err, msg)
+		}
+	}
+	return n, err
+}
+
+func (s *stdioSession) Write(b []byte) (int, error) { return s.in.Write(b) }
+
+func (s *stdioSession) Close() error {
+	s.once.Do(func() {
+		_ = s.in.Close()
+		_ = s.out.Close()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		_ = s.cmd.Wait()
+	})
 	return nil
 }
 

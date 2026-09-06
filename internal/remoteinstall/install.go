@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/raskrebs/sonar/internal/daemon/client"
+	"github.com/raskrebs/sonar/internal/daemon/rpc"
 )
 
 // Options is one `sonar remote install` run.
@@ -66,8 +69,8 @@ type Progress func(step, detail string)
 // The whole download happens on the far end (spec, decision 2): this side only
 // resolves which release asset to fetch and what its sha256 must be, writes a
 // shell script that says so, and pipes it to `sh -s` over one ssh session. Two
-// short sessions bracket it: `uname -s -m` before, to pick the asset, and
-// `sonar version` plus `sonar daemon status` after, to prove it worked.
+// short sessions bracket it: `uname -s -m` before, to pick the asset, and a
+// `daemon.hello` over `sonar daemon stdio` after, to prove it worked.
 //
 // Re-running upgrades in place: the binary is replaced atomically and the
 // service restarted, so an install and an update are the same operation.
@@ -170,13 +173,24 @@ type daemonStatus struct {
 
 // check runs the post-install verification and fills in the result.
 //
-// When step 3A.2's `sonar daemon stdio` lands this becomes a `daemon.hello`
-// over the bridge, which proves the protocol as well as the process. Until
-// then `daemon status` over a second ssh session is the same answer one hop
-// further out.
+// It is a real `daemon.hello` over `ssh <target> sonar daemon stdio` — the same
+// session the bridge opens — so what it proves is what the next thing to happen
+// actually needs: the binary runs, its daemon is up, and it speaks a protocol
+// major this build can talk to. `daemon status --json` over a second ssh
+// session, which is what 3A.3 shipped, could only prove the first two, and one
+// hop further out (contract §40, §43).
+//
+// The one case that cannot be checked this way is --no-service: nothing was
+// started, so there is no daemon to speak to and the binary itself is all there
+// is to ask.
 func check(ctx context.Context, r runner, res *Result, progress Progress) error {
 	progress(StepCheck, res.BinPath)
 
+	if res.Service == ServiceNone {
+		return checkBinary(ctx, r, res)
+	}
+
+	var lastErr error
 	for attempt := 0; attempt < checkAttempts; attempt++ {
 		if attempt > 0 {
 			select {
@@ -185,33 +199,78 @@ func check(ctx context.Context, r runner, res *Result, progress Progress) error 
 			case <-time.After(checkBackoff):
 			}
 		}
-		out, err := r.output(ctx, verifyCommand)
+		hello, err := helloOverStdio(ctx, r)
 		if err != nil {
-			return err
+			// systemctl returns as soon as it has forked the unit, so the
+			// first attempt can legitimately find nothing listening.
+			lastErr = err
+			continue
 		}
-
-		res.RemoteVersion = parseVersionLine(out)
-		if res.RemoteVersion == "" {
-			return fmt.Errorf("installed %s on %s, but `%s version` printed nothing usable: %s",
-				res.Version, res.Target, res.BinPath, strings.TrimSpace(firstLine(out)))
-		}
-		if res.RemoteVersion != res.Version {
-			return fmt.Errorf("installed %s on %s, but the binary there reports %s",
-				res.Version, res.Target, res.RemoteVersion)
-		}
-
-		if status, ok := parseDaemonStatus(out); ok {
-			res.DaemonRunning = status.Running
-			res.DaemonPID = status.PID
-		}
-		if res.DaemonRunning || res.Service == ServiceNone {
-			break
-		}
+		res.RemoteVersion = hello.DaemonVersion
+		res.DaemonRunning, res.DaemonPID = true, hello.PID
+		break
 	}
 
-	if res.Service != ServiceNone && !res.DaemonRunning {
-		return fmt.Errorf("installed %s on %s, but its daemon is not running\nhint: `ssh %s %s daemon log` says why",
-			res.Version, res.Target, res.Target, res.BinPath)
+	if !res.DaemonRunning {
+		return fmt.Errorf("installed %s on %s, but its daemon never answered: %v\nhint: `ssh %s %s daemon log` says why",
+			res.Version, res.Target, lastErr, res.Target, res.BinPath)
+	}
+	if res.RemoteVersion == "" {
+		return fmt.Errorf("installed %s on %s, but its daemon does not report a version",
+			res.Version, res.Target)
+	}
+	if res.RemoteVersion != res.Version {
+		return fmt.Errorf("installed %s on %s, but the daemon there reports %s",
+			res.Version, res.Target, res.RemoteVersion)
+	}
+	return nil
+}
+
+// helloOverStdio opens one `sonar daemon stdio` session and completes the
+// handshake. `--no-autostart` is deliberate: the check is asking whether the
+// service this install set up is running, and a daemon it started itself would
+// answer the wrong question.
+func helloOverStdio(ctx context.Context, r runner) (rpc.DaemonHelloResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, helloTimeout)
+	defer cancel()
+
+	stream, err := r.stdio(ctx, `"`+BinPath+`" daemon stdio --no-autostart`)
+	if err != nil {
+		return rpc.DaemonHelloResult{}, err
+	}
+	defer stream.Close()
+
+	c, err := client.Attach(ctx, stream, "ssh://"+r.target, client.ClientInfo{
+		Name: "cli", Version: "remote-install",
+	})
+	if err != nil {
+		return rpc.DaemonHelloResult{}, err
+	}
+	defer c.Close()
+	return c.Hello(), nil
+}
+
+// helloTimeout bounds one handshake attempt. A cold ssh session pays for the
+// TCP handshake, the key exchange and a login shell before anything sonar does.
+const helloTimeout = 30 * time.Second
+
+// checkBinary is the --no-service path: ask the installed binary what it is.
+func checkBinary(ctx context.Context, r runner, res *Result) error {
+	out, err := r.output(ctx, verifyCommand)
+	if err != nil {
+		return err
+	}
+	res.RemoteVersion = parseVersionLine(out)
+	if res.RemoteVersion == "" {
+		return fmt.Errorf("installed %s on %s, but `%s version` printed nothing usable: %s",
+			res.Version, res.Target, res.BinPath, strings.TrimSpace(firstLine(out)))
+	}
+	if res.RemoteVersion != res.Version {
+		return fmt.Errorf("installed %s on %s, but the binary there reports %s",
+			res.Version, res.Target, res.RemoteVersion)
+	}
+	if status, ok := parseDaemonStatus(out); ok {
+		res.DaemonRunning, res.DaemonPID = status.Running, status.PID
 	}
 	return nil
 }
