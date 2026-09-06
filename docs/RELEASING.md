@@ -49,13 +49,49 @@ The tag triggers `release.yml`, which:
    (`tray/SonarTray.swift`) alongside them, so a macOS tarball holds `sonar`
    and `sonar-tray`;
 3. publishes `sonar_<os>_<arch>.tar.gz` (and `.zip` on Windows) to the GitHub
-   release with generated notes;
+   release with generated notes, alongside `sonar_checksums.txt`;
 4. updates `raskrebs/homebrew-sonar` — the formula's version, the four
    SHA-256s and the download URLs — and pushes it, so `brew upgrade` serves the
-   new build within a minute of the release finishing.
+   new build within a minute of the release finishing. It reads the SHA-256s
+   out of `sonar_checksums.txt` rather than hashing the archives again, so the
+   tap and the release cannot disagree.
 
 `scripts/install.sh` and `scripts/install.ps1` read the same release assets, so
 nothing else has to be updated by hand.
+
+## `sonar_checksums.txt`
+
+Every release publishes one `sonar_checksums.txt` next to the archives: one
+line per archive in `sha256sum`'s own format — `<sha256>` then two spaces then
+the filename — sorted by filename. It covers exactly the six archives, and
+nothing else: not itself, and not `sonar-tray`, which travels inside the darwin
+tarballs.
+
+The release job writes it after every build job's artifacts are downloaded and
+before the assets are uploaded:
+
+```sh
+sha256sum sonar_*.tar.gz sonar_*.zip | LC_ALL=C sort -k2 > sonar_checksums.txt
+```
+
+To verify a download, put the file next to whatever you fetched and let
+`sha256sum` check the ones you have:
+
+```sh
+curl -fsSLO https://github.com/raskrebs/sonar/releases/download/vX.Y.Z/sonar_checksums.txt
+sha256sum -c --ignore-missing sonar_checksums.txt
+```
+
+`--ignore-missing` is what makes this work on a partial download: without it
+`sha256sum` fails on the five archives you did not fetch. On macOS without GNU
+coreutils, `shasum -a 256 -c --ignore-missing sonar_checksums.txt` does the
+same.
+
+`sonar remote install` verifies the same way without being asked:
+`internal/remoteinstall` prefers the sha256 digest GitHub reports per asset and
+falls back to this file for releases cut before those digests existed.
+`internal/remoteinstall/testdata/sonar_checksums.txt` pins the format the
+workflow produces, so a change to the shell above fails a test here first.
 
 ## Release notes
 
@@ -86,6 +122,10 @@ that repository — the CLI version plus a SHA-256 per target triple:
   }
 }
 ```
+
+The SHA-256s to paste in are the archive lines of that release's
+`sonar_checksums.txt` — the lock file pins the same hashes the release
+published, so there is nothing to recompute.
 
 `scripts/fetch-sidecar.sh` there downloads the pinned assets, verifies the
 checksums and writes `src-tauri/binaries/sonar-<triple>`, which Tauri bundles

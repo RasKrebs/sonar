@@ -112,6 +112,21 @@ jobs:
         with:
           merge-multiple: true
 
+      # One checksum file over the six archives, in sha256sum's own format
+      # ("<hex>  <name>", two spaces), sorted by filename. The globs cover only
+      # the archives, so the file never lists itself, and the count guard fails
+      # the release rather than publishing a short list.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          sha256sum sonar_*.tar.gz sonar_*.zip | LC_ALL=C sort -k2 > sonar_checksums.txt
+          count=$(wc -l < sonar_checksums.txt)
+          if [ "$count" -ne 6 ]; then
+            echo "expected 6 archives, sonar_checksums.txt lists $count" >&2
+            exit 1
+          fi
+          cat sonar_checksums.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -119,6 +134,7 @@ jobs:
           files: |
             sonar_*.tar.gz
             sonar_*.zip
+            sonar_checksums.txt
 
   bump-homebrew:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -141,14 +157,22 @@ jobs:
           VERSION="${TAG#v}"
           BASE="https://github.com/raskrebs/sonar/releases/download/${TAG}"
 
+          # The release's own sonar_checksums.txt is the single source of
+          # truth for these hashes, so the tap cannot disagree with what the
+          # release published.
+          curl -fsSL -o sonar_checksums.txt "${BASE}/sonar_checksums.txt"
+
           declare -A SHAS
           for asset in \
             sonar_darwin_arm64.tar.gz \
             sonar_darwin_amd64.tar.gz \
             sonar_linux_arm64.tar.gz \
             sonar_linux_amd64.tar.gz; do
-            curl -fsSL -o "$asset" "${BASE}/${asset}"
-            SHAS[$asset]=$(sha256sum "$asset" | awk '{print $1}')
+            SHAS[$asset]=$(awk -v a="$asset" '$2 == a {print $1}' sonar_checksums.txt)
+            if [ -z "${SHAS[$asset]}" ]; then
+              echo "sonar_checksums.txt has no line for ${asset}" >&2
+              exit 1
+            fi
           done
 
           FORMULA=tap/Formula/sonar.rb

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -77,6 +78,55 @@ E48570A81434686696DCEF983F4758C8C3A7ED2AAD4E4F159106257B51AED365 *dist/sonar_lin
 	}
 	if got["sonar_linux_arm64.tar.gz"] != "e48570a81434686696dcef983f4758c8c3a7ed2aad4e4f159106257b51aed365" {
 		t.Errorf("arm64 sum = %q", got["sonar_linux_arm64.tar.gz"])
+	}
+}
+
+// The checksum file the release workflow publishes is the fallback this
+// resolver reads, so its exact shape is pinned here rather than only described:
+// testdata/sonar_checksums.txt is a byte-for-byte copy of what
+// `sha256sum sonar_*.tar.gz sonar_*.zip | LC_ALL=C sort -k2` writes in the
+// release job — six archives, sha256sum's two-space form, sorted by filename,
+// and nothing else.
+func TestParseChecksumsReadsTheReleaseChecksumFile(t *testing.T) {
+	body, err := os.ReadFile("testdata/sonar_checksums.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The file the release publishes covers the six archives and nothing else:
+	// not itself, and not the Swift tray binary inside the darwin tarballs.
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("checksum file has %d lines, want 6", len(lines))
+	}
+	prev := ""
+	for i, line := range lines {
+		hex, name, ok := strings.Cut(line, "  ")
+		if !ok || len(hex) != 64 || strings.HasPrefix(name, " ") {
+			t.Fatalf("line %d is not sha256sum's \"<hex>  <name>\" form: %q", i+1, line)
+		}
+		if name <= prev {
+			t.Errorf("line %d is not sorted by filename: %q after %q", i+1, name, prev)
+		}
+		prev = name
+	}
+
+	got := ParseChecksums(string(body))
+	for _, name := range []string{
+		"sonar_darwin_amd64.tar.gz",
+		"sonar_darwin_arm64.tar.gz",
+		"sonar_linux_amd64.tar.gz",
+		"sonar_linux_arm64.tar.gz",
+		"sonar_windows_amd64.zip",
+		"sonar_windows_arm64.zip",
+	} {
+		sum := got[name]
+		if len(sum) != 64 || strings.Trim(sum, "0123456789abcdef") != "" {
+			t.Errorf("%s = %q, want a lowercase hex sha256", name, sum)
+		}
+	}
+	if len(got) != 6 {
+		t.Errorf("parsed %d entries, want 6: %v", len(got), got)
 	}
 }
 
