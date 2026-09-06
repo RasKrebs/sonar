@@ -5,6 +5,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/display"
 	"github.com/raskrebs/sonar/internal/killer"
+	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/profile"
 	"github.com/spf13/cobra"
 )
@@ -28,15 +29,26 @@ var downCmd = &cobra.Command{
 			return err
 		}
 
-		snapshot := scanForKill()
-		var targets []killer.Target
-		for _, entry := range prof.Ports {
-			for _, p := range snapshot {
-				if p.Port == entry.Port {
-					targets = append(targets, killer.Target{Port: p.Port, BindAddress: p.BindAddress})
+		selectTargets := func(snapshot []ports.ListeningPort) ([]killer.Target, error) {
+			var targets []killer.Target
+			for _, entry := range prof.Ports {
+				for _, p := range snapshot {
+					if p.Port == entry.Port {
+						targets = append(targets, killer.Target{Port: p.Port, BindAddress: p.BindAddress})
+					}
 				}
 			}
+			return targets, nil
 		}
+
+		if onRemoteHost() {
+			fmt.Printf("Profile %s on %s:\n", display.Bold(prof.Name), display.Bold(remoteHostFlag))
+			return killSweepThroughDaemon(cmd.Context(), selectTargets,
+				killer.Options{Force: downForceFlag}, !downYesFlag, false)
+		}
+
+		snapshot := scanForKill()
+		targets, _ := selectTargets(snapshot)
 		if len(targets) == 0 {
 			fmt.Println("No profile ports are currently running.")
 			return nil
@@ -51,5 +63,6 @@ var downCmd = &cobra.Command{
 func init() {
 	downCmd.Flags().BoolVarP(&downYesFlag, "yes", "y", false, "Skip confirmation prompt")
 	downCmd.Flags().BoolVarP(&downForceFlag, "force", "f", false, "Send SIGKILL instead of SIGTERM")
+	addHostFlag(downCmd, "Stop the profile's ports on a registered remote `host`")
 	rootCmd.AddCommand(downCmd)
 }

@@ -29,6 +29,15 @@ For other services, opens a raw TCP connection to the port.`,
 
 		bindIP, _ := cmd.Flags().GetString("ip")
 
+		// Attaching is a terminal on this machine talking to a process on this
+		// machine: a docker exec, or a raw TCP connection to the port. Neither
+		// travels over the bridge, and pretending otherwise would open a shell
+		// into the wrong container.
+		if onRemoteHost() {
+			return fmt.Errorf("attach cannot run on a remote host: it puts this terminal in front of a local process\nhint: ssh to the host and run `sonar attach %d` there",
+				port)
+		}
+
 		lp, err := ports.FindByPort(port, bindIP)
 		if err != nil {
 			return err
@@ -53,6 +62,7 @@ For other services, opens a raw TCP connection to the port.`,
 func init() {
 	attachCmd.Flags().StringVar(&attachShell, "shell", "", "Shell to use for Docker exec (default: auto-detect sh/bash)")
 	attachCmd.Flags().String("ip", "", "Specify bind address when a port is bound to multiple IPs")
+	addHostFlag(attachCmd, "Refused: attach is a terminal on this machine, so ssh there and attach locally")
 	rootCmd.AddCommand(attachCmd)
 }
 

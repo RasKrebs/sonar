@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/raskrebs/sonar/internal/killer"
+	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +33,14 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		Hint(cmd, HintKillAllToKill(killAllFilterFlag, killAllProjectFlag, killAllYesFlag, killAllForceFlag))
+		opts := killer.Options{Force: killAllForceFlag}
+		if onRemoteHost() {
+			return killSweepThroughDaemon(cmd.Context(),
+				func(snapshot []ports.ListeningPort) ([]killer.Target, error) {
+					return sweepTargets(snapshot, killAllFilterFlag, killAllProjectFlag)
+				}, opts, !killAllYesFlag, false)
+		}
+
 		snapshot := scanForKill()
 		targets, err := sweepTargets(snapshot, killAllFilterFlag, killAllProjectFlag)
 		if err != nil {
@@ -41,7 +50,7 @@ Examples:
 			fmt.Println("No matching ports found.")
 			return nil
 		}
-		opts := killer.Options{Force: killAllForceFlag, Ports: snapshot}
+		opts.Ports = snapshot
 		return killRun(cmd.Context(), targets, snapshot, opts, !killAllYesFlag, false)
 	},
 }
@@ -51,5 +60,6 @@ func init() {
 	killAllCmd.Flags().StringVar(&killAllProjectFlag, "project", "", "Filter by Docker Compose project name")
 	killAllCmd.Flags().BoolVarP(&killAllYesFlag, "yes", "y", false, "Skip confirmation prompt")
 	killAllCmd.Flags().BoolVarP(&killAllForceFlag, "force", "f", false, "Send SIGKILL instead of SIGTERM")
+	addHostFlag(killAllCmd, "Kill on a registered remote `host` instead of this machine")
 	rootCmd.AddCommand(killAllCmd)
 }

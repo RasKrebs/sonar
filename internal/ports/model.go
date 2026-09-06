@@ -46,6 +46,12 @@ type ListeningPort struct {
 	Type        PortType
 	IsApp       bool // true for desktop apps (Figma, Discord, etc.)
 
+	// Host is the machine this row was seen on: empty or "localhost" for a
+	// direct scan, and the registered name for a row that reached the CLI
+	// through the daemon from a remote host. It is what puts a HOST column on
+	// `sonar list --host "*"`.
+	Host string
+
 	// Display is a display name that was already resolved elsewhere. The
 	// daemon sets it when it converts a published state.Port back into a
 	// scanner row: the wire shape does not carry the parent cmdline

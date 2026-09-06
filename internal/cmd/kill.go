@@ -51,6 +51,7 @@ Examples:
   sonar kill --all --project my-app    # one Docker Compose project
   sonar kill 3000 --ip 127.0.0.1       # disambiguate a multi-bind port
   sonar kill 3000 --tree --dry-run     # show the tree, change nothing
+  sonar kill 3000 --host hetzner       # on a registered remote host
 
 A positional argument is read as a port; a number no one is listening on that
 matches a running process is read as a pid.`,
@@ -75,6 +76,7 @@ func init() {
 	killCmd.Flags().BoolVar(&killDryRunFlag, "dry-run", false, "Show what would be killed and do nothing")
 	killCmd.Flags().String("ip", "", "Bind address, when a port is bound to several")
 	killCmd.Flags().BoolVar(&killJSONFlag, "json", false, "Print the result list as JSON")
+	addHostFlag(killCmd, "Kill on a registered remote `host` instead of this machine")
 	killCmd.MarkFlagsMutuallyExclusive("group", "all")
 	killCmd.MarkFlagsMutuallyExclusive("session", "all")
 	killCmd.MarkFlagsMutuallyExclusive("session", "group")
@@ -89,7 +91,23 @@ func runKill(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 || len(killPIDFlag) > 0 {
 			return fmt.Errorf("--session cannot be combined with ports or pids")
 		}
+		if onRemoteHost() {
+			// A session is local daemon state: the agent that started the run
+			// is on this machine, and the remote daemon has never heard of it.
+			return fmt.Errorf("--session and --host cannot be combined: a session is local daemon state")
+		}
 		return killSession(cmd.Context())
+	}
+
+	// A kill on another machine has no direct path: the bridge to that host is
+	// in the daemon, so the daemon does the killing there as well as here.
+	if onRemoteHost() {
+		c, err := connectForHostWrite(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		return killThroughDaemon(cmd.Context(), c, args, bindIP)
 	}
 
 	// A reachable daemon does the killing, so it rescans straight afterwards

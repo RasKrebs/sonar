@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,6 +18,7 @@ var DefaultColumns = []string{"port", "process", "group", "container", "image", 
 
 // AllColumns lists every supported column name.
 var AllColumns = []string{
+	"host",
 	"port", "process", "pid", "type", "url",
 	"cpu", "mem", "threads", "uptime", "state", "connections",
 	"container", "image", "containerport", "compose", "project",
@@ -46,6 +48,7 @@ func RenderTable(w io.Writer, pp []ports.ListeningPort, opts TableOptions) {
 	if len(cols) == 0 {
 		cols = DefaultColumns
 	}
+	cols = withHostColumn(cols, filtered)
 
 	// Build header row
 	headers := make([]string, len(cols))
@@ -132,6 +135,36 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-vl)
 }
 
+// withHostColumn puts HOST in front of the table as soon as the rows come from
+// more than one machine. One host needs no column — every row would say the
+// same thing — and two hosts need one in every view, not only the one where
+// someone remembered to ask for it.
+func withHostColumn(cols []string, rows []ports.ListeningPort) []string {
+	if len(rows) == 0 || slices.Contains(cols, "host") || !multiHost(rows) {
+		return cols
+	}
+	return append([]string{"host"}, cols...)
+}
+
+// multiHost reports whether the rows name more than one machine.
+func multiHost(rows []ports.ListeningPort) bool {
+	first := hostLabel(rows[0])
+	for _, r := range rows[1:] {
+		if hostLabel(r) != first {
+			return true
+		}
+	}
+	return false
+}
+
+// hostLabel is what the HOST column prints: a row with no host is this machine.
+func hostLabel(p ports.ListeningPort) string {
+	if p.Host == "" {
+		return "localhost"
+	}
+	return p.Host
+}
+
 func columnLabel(col string) string {
 	switch col {
 	case "containerport":
@@ -152,6 +185,8 @@ func columnLabel(col string) string {
 		return "THR"
 	case "connections":
 		return "CONN"
+	case "host":
+		return "HOST"
 	case "health":
 		return "HEALTH"
 	case "latency":
@@ -165,6 +200,8 @@ func columnLabel(col string) string {
 
 func columnValue(p ports.ListeningPort, col string) string {
 	switch col {
+	case "host":
+		return Cyan(hostLabel(p))
 	case "port":
 		return BoldCyan(fmt.Sprintf("%d", p.Port))
 	case "process":
