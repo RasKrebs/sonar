@@ -31,6 +31,7 @@ import (
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/runs"
 	"github.com/raskrebs/sonar/internal/state"
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 // buildBinary compiles the sonar CLI once per test run.
@@ -155,6 +156,14 @@ func (e *env) command(args ...string) *exec.Cmd {
 		"SONAR_SOCKET="+e.socket,
 		// XDG_RUNTIME_DIR would otherwise outrank HOME for the log path.
 		"XDG_RUNTIME_DIR=",
+		// The test binary is isolated with one SONAR_DB for the whole run
+		// (internal/testenv); clearing it puts this env's database under this
+		// env's HOME, which is what a test that restarts a daemon and expects
+		// its own rows back is asking for.
+		"SONAR_DB=",
+		// These children are the real `sonar`, and the tests here are the ones
+		// that drive its autostart on purpose.
+		testenv.ChildEnv(),
 	)
 	return cmd
 }
@@ -431,11 +440,14 @@ func TestAutostart(t *testing.T) {
 	}
 
 	// Connect uses the running executable by default; point it at the built
-	// binary and give the child the same isolated HOME.
+	// binary and give the child the same isolated HOME. Autostart is off for
+	// the test binary as a whole, and this is the test that exists to drive it.
+	testenv.AllowAutostart(t)
 	t.Setenv("HOME", e.home)
 	t.Setenv("USERPROFILE", e.home)
 	t.Setenv("SONAR_SOCKET", e.socket)
 	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("SONAR_DB", "")
 
 	c, err := client.Connect(ctx, client.ClientInfo{
 		Name: "cli", Version: "itest", Socket: e.socket, BinaryPath: e.bin,

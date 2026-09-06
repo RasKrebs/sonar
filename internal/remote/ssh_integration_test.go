@@ -27,6 +27,7 @@ import (
 	"github.com/raskrebs/sonar/internal/daemon/client"
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/state"
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 // buildBinary compiles the sonar CLI once per test run.
@@ -133,6 +134,13 @@ func (e *bridgeEnv) env() []string {
 		"USERPROFILE="+e.localHome,
 		"SONAR_SOCKET="+e.localSocket,
 		"XDG_RUNTIME_DIR=",
+		// One SONAR_DB is set for the whole isolated test binary
+		// (internal/testenv); clear it so each side keeps its own database
+		// under its own HOME.
+		"SONAR_DB=",
+		// The far side of the fake ssh autostarts its own daemon, which is
+		// the behaviour under test.
+		testenv.ChildEnv(),
 		"PATH="+e.binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_SSH_BIN="+e.bin,
 		"FAKE_SSH_HOME="+e.remoteHome,
@@ -179,6 +187,7 @@ func (e *bridgeEnv) stopRemoteDaemon() {
 		"USERPROFILE="+e.remoteHome,
 		"SONAR_SOCKET="+e.remoteSock,
 		"XDG_RUNTIME_DIR=",
+		"SONAR_DB=",
 	)
 	cmd.WaitDelay = 5 * time.Second
 	_ = cmd.Run()

@@ -19,6 +19,7 @@ import (
 	"github.com/raskrebs/sonar/internal/groups"
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/scanner"
+	"github.com/raskrebs/sonar/internal/testenv"
 )
 
 // The child side of every test here: re-running this binary with
@@ -30,9 +31,12 @@ const (
 	envDelay  = "SONAR_TEST_LISTEN_DELAY"
 )
 
+// TestMain doubles as the service a group starts. A service is not a test run,
+// so only the test branch is isolated; the child inherits the environment its
+// parent was already isolated into.
 func TestMain(m *testing.M) {
 	if os.Getenv(envListen) == "" {
-		os.Exit(m.Run())
+		os.Exit(testenv.Run(m))
 	}
 	if d, err := time.ParseDuration(os.Getenv(envDelay)); err == nil && d > 0 {
 		time.Sleep(d)
