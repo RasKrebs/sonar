@@ -45,6 +45,7 @@ func TestRepliesValidateAgainstTheProtocolSchema(t *testing.T) {
 		{"claims.acquire", rpc.ClaimsAcquireParams{Project: "shop"}, "ClaimsAcquireResult"},
 		{"claims.list", rpc.Empty{}, "ClaimsListResult"},
 		{"claims.release", rpc.ClaimsReleaseParams{Key: "shop/main"}, "ClaimsReleaseResult"},
+		{"groups.inspect", rpc.GroupsInspectParams{Name: "shop"}, "GroupsInspectResult"},
 	}
 
 	for _, tc := range cases {
