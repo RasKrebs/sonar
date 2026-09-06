@@ -3,7 +3,6 @@ package docker
 import (
 	"bufio"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,7 +147,7 @@ func buildIPMap(containerNames []string) map[string]string {
 		`{{.Name}}{{range $net, $cfg := .NetworkSettings.Networks}} {{$cfg.IPAddress}}{{end}}`},
 		containerNames...)
 
-	out, err := exec.Command("docker", args...).Output()
+	out, err := output(args...)
 	if err != nil {
 		return nil
 	}
@@ -179,7 +178,7 @@ type procNetEntry struct {
 
 // readProcNetTCP reads /proc/net/tcp inside a Docker container and returns parsed entries.
 func readProcNetTCP(containerName string) []procNetEntry {
-	out, err := exec.Command("docker", "exec", containerName, "cat", "/proc/net/tcp").Output()
+	out, err := output("exec", containerName, "cat", "/proc/net/tcp")
 	if err != nil {
 		return nil
 	}
