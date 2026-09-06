@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPath(t *testing.T) {
@@ -199,11 +200,52 @@ func TestWriteTemplateRefusesOverwrite(t *testing.T) {
 // daemon actually honours have to be in it.
 func TestTemplateDocumentsTheDaemonAndItsEnvironment(t *testing.T) {
 	for _, want := range []string{
-		"# daemon:", "idle_timeout: 30m", "log_level: info",
+		"# daemon:", "idle_timeout: 30m", "log_level: info", "stats_interval: 1s",
 		"SONAR_DB", "SONAR_SOCKET", "SONAR_NO_HINTS",
 	} {
 		if !strings.Contains(template, want) {
 			t.Errorf("config template does not mention %q", want)
 		}
+	}
+}
+
+// daemon.stats_interval defaults to 1 s, is clamped rather than trusted, and
+// never leaves the daemon with a zero cadence.
+func TestResolvedStatsInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		set  string
+		want time.Duration
+	}{
+		{"unset", "", DefaultStatsInterval},
+		{"explicit", "2s", 2 * time.Second},
+		{"sub-second", "500ms", 500 * time.Millisecond},
+		{"below the floor", "10ms", MinStatsInterval},
+		{"zero", "0", DefaultStatsInterval},
+		{"nonsense", "soon", DefaultStatsInterval},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DaemonConfig{StatsInterval: tt.set}.ResolvedStatsInterval()
+			if got != tt.want {
+				t.Errorf("ResolvedStatsInterval(%q) = %s, want %s", tt.set, got, tt.want)
+			}
+		})
+	}
+}
+
+// An out-of-range stats_interval is repaired with a warning, the way every
+// other bad setting is, and its neighbours survive.
+func TestValidateClampsStatsInterval(t *testing.T) {
+	cfg := &Config{Daemon: DaemonConfig{StatsInterval: "5ms", LogLevel: "debug"}}
+	warnings := validate(cfg)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "stats_interval") {
+		t.Fatalf("warnings = %v, want one about stats_interval", warnings)
+	}
+	if got := cfg.Daemon.ResolvedStatsInterval(); got != MinStatsInterval {
+		t.Errorf("stats_interval = %s, want the %s floor", got, MinStatsInterval)
+	}
+	if cfg.Daemon.LogLevel != "debug" {
+		t.Errorf("log_level = %q, a valid neighbour was dropped", cfg.Daemon.LogLevel)
 	}
 }

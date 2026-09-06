@@ -39,6 +39,16 @@ const (
 	HealthTimeout = 2 * time.Second
 	// HostStatsTimeout bounds one collection of the machine's own load.
 	HostStatsTimeout = 3 * time.Second
+	// StatsInterval is the fixed cadence of the stats-only tick: per-process
+	// cpu and memory plus this machine's load row, sampled without a port
+	// scan behind it. Unlike the scan interval it never backs off, and it
+	// only runs while someone is subscribed.
+	StatsInterval = 1 * time.Second
+	// MinStatsInterval is the floor `daemon.stats_interval` may be set to.
+	// Below it the sampler costs more than the numbers it publishes are
+	// worth: every tick is a `ps` per machine on Unix and a PowerShell on
+	// Windows.
+	MinStatsInterval = 250 * time.Millisecond
 )
 
 // Include is the per-subscriber opt-in from `state.subscribe {include}`.
@@ -117,6 +127,16 @@ type Options struct {
 	// never opens a real socket.
 	Probe Probe
 
+	// SampleStats reads cpu, memory, state and uptime for pids the last
+	// snapshot already named — the stats-only tick's one OS call. Tests
+	// inject a fake; production leaves it nil and gets ports.SampleProcStats.
+	SampleStats func(pids []int) map[int]ports.ProcSample
+
+	// StatsInterval overrides the stats-only tick's cadence
+	// (`daemon.stats_interval`). Zero means StatsInterval; anything below
+	// MinStatsInterval is clamped to it.
+	StatsInterval time.Duration
+
 	// Now overrides the clock, for tests.
 	Now func() time.Time
 }
@@ -127,6 +147,9 @@ type Loop struct {
 	now  func() time.Time
 
 	wake chan struct{}
+	// statsWake unparks the stats-only tick when a subscriber connects. It is
+	// separate from wake so the two ticks can park and resume independently.
+	statsWake chan struct{}
 
 	attr attribution
 
@@ -142,6 +165,25 @@ type Loop struct {
 	// true by construction, and keeps delta seq order the same as publish
 	// order.
 	scanMu sync.Mutex
+
+	// commitMu is the narrower half of that promise: it is held across the
+	// commit into the cache *and* the publish that follows, by everything
+	// that publishes — a scan, a remote host's rows changing, and the
+	// stats-only tick. That is what makes delta seq order equal publish
+	// order (contract §38), and it is all the stats tick needs.
+	//
+	// The tick deliberately does not take scanMu. A scan holds that from its
+	// first OS call to its last, and with a container running `docker stats`
+	// alone is two seconds of it — measured, on the machine this was built
+	// for. A 1 s sampler queued behind that is not a 1 s sampler; it emitted
+	// a burst of deltas every five or six seconds. Since the tick reads no
+	// store and runs no scan, the write-ordering rule scanMu exists for
+	// (1A.15) does not apply to it, and it holds commitMu across its own
+	// read-sample-commit so it can still never publish a snapshot a scan has
+	// already replaced.
+	//
+	// Lock order is scanMu then commitMu, never the reverse.
+	commitMu sync.Mutex
 
 	mu   sync.Mutex
 	subs int
@@ -182,15 +224,19 @@ func New(opts Options) *Loop {
 	if opts.HostStats == nil {
 		opts.HostStats = hoststats.New().Collect
 	}
+	if opts.SampleStats == nil {
+		opts.SampleStats = ports.SampleProcStats
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Loop{
-		opts:     opts,
-		now:      now,
-		wake:     make(chan struct{}, 1),
-		interval: BaseInterval,
+		opts:      opts,
+		now:       now,
+		wake:      make(chan struct{}, 1),
+		statsWake: make(chan struct{}, 1),
+		interval:  BaseInterval,
 	}
 }
 
@@ -335,11 +381,29 @@ func (l *Loop) Wake() {
 	case l.wake <- struct{}{}:
 	default:
 	}
+	select {
+	case l.statsWake <- struct{}{}:
+	default:
+	}
 }
 
 // Run drives the loop until ctx is cancelled. With zero subscribers it parks on
 // Wake and does no work at all; the next RPC or subscription starts it again.
+//
+// It also runs the stats-only tick (see runStats) in a second goroutine, and
+// returns only once both have stopped. The two are serialized against each
+// other by scanMu, never by being the same goroutine: the whole point is that
+// a 1 s load sample does not have to wait for — or reset — an adaptive port
+// scan that may be 5 s apart.
 func (l *Loop) Run(ctx context.Context) {
+	var stats sync.WaitGroup
+	stats.Add(1)
+	go func() {
+		defer stats.Done()
+		l.runStats(ctx)
+	}()
+	defer stats.Wait()
+
 	timer := time.NewTimer(time.Hour)
 	defer timer.Stop()
 
@@ -382,25 +446,23 @@ func (l *Loop) Run(ctx context.Context) {
 }
 
 // scanAndPublish runs one scan, updates the cache, adapts the interval and
-// publishes when something changed. One scan at a time (see scanMu).
+// publishes when something changed. One scan at a time (see scanMu); the
+// publish itself happens inside scanLocked, under commitMu.
 func (l *Loop) scanAndPublish(include Include) {
 	l.scanMu.Lock()
 	defer l.scanMu.Unlock()
 
-	next, prev, changed, err := l.scanLocked(include)
+	_, prev, _, err := l.scanLocked(include)
 	if err != nil {
 		l.opts.Logger.Warn("scan failed, keeping last good state", "error", err)
+		// A scan_error carries no snapshot and takes no seq, so it needs no
+		// place in the commit order.
 		l.opts.Publish(prev, prev, []state.Event{{
 			Kind: "scan_error",
 			At:   l.nowRFC3339(),
 			Data: map[string]any{"error": err.Error()},
 		}})
-		return
 	}
-	if !changed {
-		return
-	}
-	l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
 }
 
 // publish hands the transition to the daemon and then writes its port
@@ -451,6 +513,27 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	// is, not an opt-in statistic (step 1A.7).
 	probeConfigured(rows, groupRows, l.opts.Probe)
 
+	// Everything from here on is the commit: the point at which this scan
+	// becomes the published state. It is serialized against every other
+	// publisher, and the publish rides inside it so a later seq can never
+	// reach a client first (contract §38).
+	l.commitMu.Lock()
+	defer l.commitMu.Unlock()
+
+	next, prev, changed = l.commitScan(subs, include, wantHealth, rows, groupRows, sessionRows, host)
+	if changed {
+		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
+	}
+	return next, prev, changed, nil
+}
+
+// commitScan swaps a finished scan into the cache and adapts the interval.
+// Caller holds scanMu and commitMu; this takes l.mu for the swap itself.
+func (l *Loop) commitScan(
+	subs int, include Include, wantHealth bool,
+	rows []state.Port, groupRows []state.Group, sessionRows []state.SessionRecord,
+	host state.Host,
+) (next, prev state.Snapshot, changed bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -494,7 +577,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 			next.Seq = prev.Seq
 			l.snap = next
 			l.interval = backoff(l.interval, l.maxIntervalLocked())
-			return next, prev, false, nil
+			return next, prev, false
 		}
 		// Only the machine's own load moved. It is published — host load is
 		// state, not an opt-in statistic, so it reaches every subscriber
@@ -507,7 +590,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		next.Seq = l.seq
 		l.snap = next
 		l.interval = backoff(l.interval, l.maxIntervalLocked())
-		return next, prev, true, nil
+		return next, prev, true
 	}
 
 	l.seq++
@@ -515,7 +598,7 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	l.snap = next
 	l.haveSnap = true
 	l.interval = BaseInterval
-	return next, prev, true, nil
+	return next, prev, true
 }
 
 // RemoteChanged republishes the current state with the remote hosts' rows as
@@ -524,18 +607,31 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 // local machine a diff and a marshal rather than a full port scan.
 //
 // It takes scanMu like a scan does, so its publish cannot interleave with one
-// and delta seq order stays publish order (contract §38). Before the first
-// local scan there is nothing to merge into, so it wakes the loop instead and
-// the remote rows ride out with the first tick.
+// and delta seq order stays publish order (contract §38).
+//
+// Before the first local scan it publishes against the identity-only snapshot
+// CachedAll synthesises rather than declining to publish. Waking the loop and
+// leaving the rows for the first tick looked equivalent and was not: a bridge
+// that connects in that window reaches no subscriber until a scan lands, and
+// nothing tells the subscriber a host appeared. It still wakes the loop, so
+// the local half follows.
 func (l *Loop) RemoteChanged() {
 	l.scanMu.Lock()
 	defer l.scanMu.Unlock()
+	l.commitMu.Lock()
+	defer l.commitMu.Unlock()
 
 	l.mu.Lock()
 	if !l.haveSnap {
-		l.mu.Unlock()
-		l.Wake()
-		return
+		// The same base CachedAll serves before the first scan, so what a
+		// subscriber is told and what a new subscriber reads agree.
+		l.local = state.Rows{Hosts: []state.Host{l.identityRow()}}.Normalize()
+		l.snap = l.local.Into(state.Snapshot{
+			At:            l.now().Format(time.RFC3339),
+			DaemonVersion: l.opts.DaemonVersion,
+		})
+		l.haveSnap = true
+		defer l.Wake()
 	}
 	prev := l.snap
 	next := l.local.Append(l.remoteRows()).Into(state.Snapshot{
@@ -753,16 +849,13 @@ func (l *Loop) scanNow(include Include) (state.Snapshot, error) {
 	l.scanMu.Lock()
 	defer l.scanMu.Unlock()
 
-	next, prev, changed, err := l.scanLocked(l.withDemand(include))
+	next, prev, _, err := l.scanLocked(l.withDemand(include))
 	if err != nil {
 		if prev.Seq > 0 {
 			// A failed rescan still serves the last good state.
 			return prev, nil
 		}
 		return state.Snapshot{}, err
-	}
-	if changed {
-		l.publish(prev, next, deriveEvents(prev, next, l.nowRFC3339()))
 	}
 	return next, nil
 }

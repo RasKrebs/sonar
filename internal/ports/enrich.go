@@ -77,20 +77,9 @@ func EnrichStats(pp []ListeningPort, dockerStats map[string]*DockerStatsEntry) {
 	// Batch native process stats into a single ps call
 	batchEnrichProcessStats(pp)
 
-	// Connection counts — on Windows, fetch netstat once and reuse the output
-	if runtime.GOOS == "windows" {
-		out, err := exec.Command("netstat", "-ano").Output()
-		if err == nil {
-			output := string(out)
-			for i := range pp {
-				pp[i].Connections = countConnectionsNetstat(output, strconv.Itoa(pp[i].Port))
-			}
-		}
-	} else {
-		for i := range pp {
-			pp[i].Connections = countConnections(pp[i].Port)
-		}
-	}
+	// Connection counts, from one listing of the machine's TCP connections
+	// rather than one call per port.
+	applyConnectionCounts(pp)
 }
 
 // DockerStatsEntry holds pre-fetched per-container stats.
@@ -378,105 +367,45 @@ func field(rec []string, cols map[string]int, name string) string {
 	return rec[i]
 }
 
-// batchEnrichProcessStats fetches CPU, memory, state, uptime for all non-Docker
-// ports in a single ps call (or PowerShell on Windows).
+// batchEnrichProcessStats fetches CPU, memory, state and uptime for every
+// non-Docker port. It goes through the same one-call sampler the daemon's
+// stats-only tick uses, so a row enriched by a scan and a row refreshed
+// between scans are filled from identical parsing.
+//
+// The sample is keyed by pid and applied to every row that pid owns. Keying
+// the other way round — one *ListeningPort per pid — silently dropped the
+// stats of every socket but the last when one process listened on several.
 func batchEnrichProcessStats(pp []ListeningPort) {
-	var nativePorts []*ListeningPort
+	pids := make([]int, 0, len(pp))
 	for i := range pp {
 		if pp[i].Type != PortTypeDocker && pp[i].PID > 0 {
-			nativePorts = append(nativePorts, &pp[i])
+			pids = append(pids, pp[i].PID)
 		}
 	}
-	if len(nativePorts) == 0 {
+	if len(pids) == 0 {
 		return
 	}
 
-	pidStrs := make([]string, len(nativePorts))
-	for i, p := range nativePorts {
-		pidStrs[i] = strconv.Itoa(p.PID)
-	}
+	samples := SampleProcStats(pids)
 
-	// Build PID -> port lookup
-	pidMap := make(map[int]*ListeningPort)
-	for _, p := range nativePorts {
-		pidMap[p.PID] = p
-	}
-
-	if runtime.GOOS == "windows" {
-		batchEnrichProcessStatsWindows(pidStrs, pidMap)
-		return
-	}
-
-	var out []byte
-	var err error
+	// macOS reports no thread count in the sampler's `ps`, so it takes a
+	// second (batched) call. It runs here, on the scan tick, and never on the
+	// 1 s stats tick.
 	if runtime.GOOS == "darwin" {
-		out, err = exec.Command("ps", "-o", "pid=,%cpu=,rss=,state=,lstart=", "-p", strings.Join(pidStrs, ",")).Output()
-	} else {
-		out, err = exec.Command("ps", "-o", "pid=,%cpu=,rss=,nlwp=,state=,lstart=", "-p", strings.Join(pidStrs, ",")).Output()
-	}
-	if err != nil {
-		return
-	}
-
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 2 {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		p, ok := pidMap[pid]
-		if !ok {
-			continue
-		}
-		// Parse remaining fields (skip pid)
-		rest := fields[1:]
-		if runtime.GOOS == "darwin" {
-			parseDarwinStats(p, rest)
-			p.ThreadCount = countThreadsDarwin(p.PID)
-		} else {
-			parseLinuxStats(p, rest)
+		threads := countThreadsDarwin(pids)
+		for pid, s := range samples {
+			s.ThreadCount = threads[pid]
+			samples[pid] = s
 		}
 	}
-}
 
-// batchEnrichProcessStatsWindows uses PowerShell Get-Process to fetch stats.
-func batchEnrichProcessStatsWindows(pidStrs []string, pidMap map[int]*ListeningPort) {
-	psCmd := fmt.Sprintf(
-		"Get-Process -Id %s -ErrorAction SilentlyContinue | Select-Object Id,CPU,WorkingSet64,@{N='ThreadCount';E={$_.Threads.Count}},@{N='StartTime';E={$_.StartTime.ToString('o')}} | ConvertTo-Csv -NoTypeInformation",
-		strings.Join(pidStrs, ","),
-	)
-
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", psCmd).Output()
-	if err != nil {
-		return
-	}
-
-	r := csv.NewReader(strings.NewReader(strings.TrimSpace(string(out))))
-	records, err := r.ReadAll()
-	if err != nil {
-		return
-	}
-
-	// CSV columns: "Id","CPU","WorkingSet64","ThreadCount","StartTime"
-	for i, record := range records {
-		if i == 0 {
-			continue // skip header
-		}
-		if len(record) < 5 {
+	for i := range pp {
+		if pp[i].Type == PortTypeDocker || pp[i].PID <= 0 {
 			continue
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(record[0]))
-		if err != nil {
-			continue
+		if s, ok := samples[pp[i].PID]; ok {
+			s.Apply(&pp[i])
 		}
-		p, ok := pidMap[pid]
-		if !ok {
-			continue
-		}
-		parseWindowsStats(p, record[1:])
 	}
 }
 

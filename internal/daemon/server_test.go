@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,6 +60,14 @@ type testHarness struct {
 	rows  []ports.ListeningPort
 	edges []ports.Connection
 	probe scanner.Probe
+
+	// statsMove turns the two fakes the stats-only tick drives — the host
+	// collector and the per-process sampler — from constants into climbing
+	// readings. It is off by default so that a test's deltas move only when
+	// the ports it fakes do; the stats-tick tests turn it on.
+	statsMove atomic.Bool
+	hostCPU   atomic.Int64 // tenths of a percent
+	sampleN   atomic.Int64
 }
 
 // newHarness builds a server whose scan loop is already running, so a change to
@@ -67,11 +76,21 @@ type testHarness struct {
 // A harness that opens a database must be built *after* the t.TempDir() that
 // holds it: cleanups run last-registered-first, and the harness has to stop
 // before the directory it writes into is removed.
-func newHarness(t *testing.T, ctx context.Context) *testHarness {
+// tune lets a test adjust the scanner options the harness builds, before the
+// loop is constructed. The stats tick is what it is for: most tests only need
+// it to exist, and paying the production 1 s cadence for each of them makes
+// the suite slower without testing anything, so they turn it down.
+type tune func(*scanner.Options)
+
+// fastStats is that knob: a cadence short enough that a test can wait for a
+// tick without waiting a second for it.
+func fastStats(o *scanner.Options) { o.StatsInterval = 50 * time.Millisecond }
+
+func newHarness(t *testing.T, ctx context.Context, tunes ...tune) *testHarness {
 	t.Helper()
 	h := &testHarness{t: t, loopDone: make(chan struct{})}
 	h.probe = refusedProbe
-	h.loop = scanner.New(scanner.Options{
+	opts := scanner.Options{
 		DaemonVersion: "test",
 		Scan: func(scanner.Include) ([]ports.ListeningPort, error) {
 			h.mu.Lock()
@@ -94,7 +113,17 @@ func newHarness(t *testing.T, ctx context.Context) *testHarness {
 			h.mu.Unlock()
 			return probe(host, port, path, timeout)
 		},
-	})
+		// The machine's own load and the per-process sampler are faked for
+		// the same reason Scan is: both fork `ps` on Unix and a PowerShell on
+		// Windows, and the stats-only tick calls them once a second for as
+		// long as a test keeps a subscription open.
+		HostStats:   h.hostStats,
+		SampleStats: h.sampleStats,
+	}
+	for _, tune := range tunes {
+		tune(&opts)
+	}
+	h.loop = scanner.New(opts)
 	h.srv = New(Options{Socket: "/test/sonar.sock", Version: "test", Scanner: h.loop})
 
 	runCtx, stop := context.WithCancel(ctx)
@@ -123,6 +152,37 @@ func (h *testHarness) shutdown() {
 	h.stopLoop()
 	<-h.loopDone
 	h.srv.closeStore()
+}
+
+// hostStats is the harness's localhost collector: a constant row unless the
+// test asked for a moving one.
+func (h *testHarness) hostStats(context.Context) (state.Host, error) {
+	if !h.statsMove.Load() {
+		return state.Host{Kernel: "test-kernel", OS: "testos", Arch: "testarch"}, nil
+	}
+	pct := float64(h.hostCPU.Add(5)) / 10
+	return state.Host{Kernel: "test-kernel", OS: "testos", Arch: "testarch", CPUPercent: &pct}, nil
+}
+
+// sampleStats is the harness's per-process sampler. It answers for nothing
+// unless the test asked for movement, so an ordinary harness test's stats are
+// whatever its fake rows carry.
+func (h *testHarness) sampleStats(pids []int) map[int]ports.ProcSample {
+	if !h.statsMove.Load() {
+		return nil
+	}
+	n := h.sampleN.Add(1)
+	out := make(map[int]ports.ProcSample, len(pids))
+	for _, pid := range pids {
+		out[pid] = ports.ProcSample{
+			CPUPercent:  float64(n),
+			MemoryRSS:   int64(pid) << 10,
+			ThreadCount: 3,
+			State:       "running",
+			Uptime:      "1s",
+		}
+	}
+	return out
 }
 
 // setRows replaces what the fake scanner returns.

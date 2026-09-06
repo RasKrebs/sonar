@@ -3,7 +3,6 @@ package ports
 import (
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -31,9 +30,9 @@ func parseDarwinStats(p *ListeningPort, fields []string) {
 	if p.StartedAt == "" {
 		p.StartedAt = parseStartTime(lstart)
 	}
-
-	// macOS: get thread count via proc_info or ps -M
-	p.ThreadCount = countThreadsDarwin(p.PID)
+	// Thread count is not in this call: macOS needs one `ps -M` per pid, so
+	// the caller decides whether that fork is worth paying for (the scan tick
+	// pays it, the 1 s stats tick does not).
 }
 
 // parseLinuxStats parses: %cpu rss nlwp state lstart...
@@ -90,74 +89,68 @@ func parseWindowsStats(p *ListeningPort, fields []string) {
 	}
 }
 
-// countThreadsDarwin gets thread count on macOS via ps -M.
-func countThreadsDarwin(pid int) int {
-	out, err := exec.Command("ps", "-M", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return 0
+// countThreadsDarwin counts each pid's threads from a single `ps -M`.
+//
+// macOS has no batched thread-count column (`nlwp` is a Linux ps extension),
+// so this used to be one fork per pid — eighteen of them on the machine this
+// was measured on, inside the lock that serializes a scan against the stats
+// tick. `ps -M` accepts a pid list and prints one line per process followed by
+// one per thread, which is all the counting needs.
+func countThreadsDarwin(pids []int) map[int]int {
+	counts := map[int]int{}
+	if len(pids) == 0 {
+		return counts
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	// First line is the header, remaining lines are threads
-	if len(lines) <= 1 {
-		return 1
-	}
-	return len(lines) - 1
-}
-
-// countConnections counts established TCP connections to a specific port.
-func countConnections(port int) int {
-	portStr := strconv.Itoa(port)
-
-	var out []byte
-	var err error
-
-	switch runtime.GOOS {
-	case "darwin":
-		out, err = exec.Command("lsof", "-iTCP:"+portStr, "-sTCP:ESTABLISHED", "-n", "-P").Output()
-	case "windows":
-		out, err = exec.Command("netstat", "-ano").Output()
-		if err != nil {
-			return 0
+	want := make(map[int]bool, len(pids))
+	pidStrs := make([]string, 0, len(pids))
+	for _, pid := range pids {
+		if pid <= 0 || want[pid] {
+			continue
 		}
-		return countConnectionsNetstat(string(out), portStr)
-	default:
-		out, err = exec.Command("ss", "-tn", "state", "established", fmt.Sprintf("sport = :%s", portStr)).Output()
+		want[pid] = true
+		pidStrs = append(pidStrs, strconv.Itoa(pid))
 	}
+	out, err := exec.Command("ps", "-M", "-p", strings.Join(pidStrs, ",")).Output()
 	if err != nil {
-		return 0
+		return counts
 	}
-
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) <= 1 {
-		return 0
-	}
-	// Subtract header line; divide by 2 for lsof (each connection shows local + remote)
-	count := len(lines) - 1
-	if runtime.GOOS == "darwin" {
-		count = count / 2
-	}
-	return count
+	return countPSThreads(string(out), want)
 }
 
-// countConnectionsNetstat counts ESTABLISHED connections to a port from netstat -ano output.
-func countConnectionsNetstat(output, portStr string) int {
-	count := 0
-	suffix := ":" + portStr
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+// countPSThreads counts the `ps -M` lines belonging to each requested pid.
+//
+// A process line is "USER PID TT %CPU ..." and a thread line is "PID %CPU ..."
+// with the user and tty columns blank, so the pid is in the first or the
+// second field depending on which it is. Both count, which is what the
+// single-pid version reported (every line but the header).
+func countPSThreads(out string, want map[int]bool) map[int]int {
+	counts := map[int]int{}
+	current := 0
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
+		if len(fields) == 0 {
 			continue
 		}
-		if strings.ToUpper(fields[3]) != "ESTABLISHED" {
+		if i == 0 && strings.EqualFold(fields[0], "USER") {
+			continue // header
+		}
+		switch {
+		case len(fields) > 1 && inSet(want, fields[1]):
+			current, _ = strconv.Atoi(fields[1])
+		case inSet(want, fields[0]):
+			current, _ = strconv.Atoi(fields[0])
+		case current == 0:
 			continue
 		}
-		// Check if local address matches the port
-		if strings.HasSuffix(fields[1], suffix) {
-			count++
-		}
+		counts[current]++
 	}
-	return count
+	return counts
+}
+
+// inSet reports whether a field is one of the pids that were asked for.
+func inSet(want map[int]bool, field string) bool {
+	v, err := strconv.Atoi(field)
+	return err == nil && want[v]
 }
 
 // decodeState converts the single-char process state to a human-readable string.
