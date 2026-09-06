@@ -47,8 +47,9 @@ func TestRenameShowsUpInTheNextDelta(t *testing.T) {
 		t.Fatalf("first delta = %+v, want the unrenamed port", first.Ports)
 	}
 
-	// The rescan the write triggers publishes before the reply is written, so
-	// the delta and the response have to be collected together.
+	// The rescan the write triggers publishes before the reply is written
+	// (contract §18, see republish), so the delta and the response have to be
+	// collected together.
 	res, delta := c.renameCollectingDelta(t, rpc.PortsRenameParams{
 		Selector: rpc.Selector{Port: intp(8123)}, Name: strp("storefront"),
 	})
@@ -342,7 +343,17 @@ func TestWritesWithoutADatabaseFail(t *testing.T) {
 }
 
 // renameCollectingDelta sends ports.rename and returns both its result and the
-// state.delta the write triggered, which arrives first.
+// state.delta that carried the rename, which the daemon publishes before it
+// writes the reply (contract §18, see republish).
+//
+// It keeps the last delta that actually moved a port, not the last delta of any
+// kind. `hosts` carries this machine's own cpu, load and memory, so a
+// subscribed connection gets a delta on ticks where no port changed at all, and
+// one of those can land between the rename's delta and the reply. Asserting on
+// whichever delta happened to arrive last made this test read a load-only
+// notification and call the rename missing; the last port-moving delta before
+// the reply is the thing §18 actually promises, and it also catches a later
+// delta putting the old name back.
 func (c *testClient) renameCollectingDelta(t *testing.T, p rpc.PortsRenameParams) (rpc.PortsRenameResult, state.Delta) {
 	t.Helper()
 	id := c.send("ports.rename", p)
@@ -355,10 +366,14 @@ func (c *testClient) renameCollectingDelta(t *testing.T, p rpc.PortsRenameParams
 		m := c.read()
 		switch {
 		case m.IsNotification() && m.Method == rpc.MethodStateDelta:
-			if err := json.Unmarshal(m.Params, &delta); err != nil {
+			var d state.Delta
+			if err := json.Unmarshal(m.Params, &d); err != nil {
 				t.Fatalf("decoding state.delta: %v", err)
 			}
-			seen = true
+			if len(d.Ports.Added)+len(d.Ports.Updated)+len(d.Ports.Removed) == 0 {
+				continue
+			}
+			delta, seen = d, true
 		case m.IsResponse() && string(m.ID) == id:
 			if m.Error != nil {
 				t.Fatalf("ports.rename: %v", m.Error)
@@ -371,6 +386,6 @@ func (c *testClient) renameCollectingDelta(t *testing.T, p rpc.PortsRenameParams
 			}
 		}
 	}
-	t.Fatal("no state.delta followed the rename")
+	t.Fatal("no state.delta carrying a port change followed the rename")
 	return res, delta
 }

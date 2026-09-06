@@ -36,9 +36,9 @@ func BuildDockerGraph(listening []ports.ListeningPort) ([]ports.Connection, erro
 	}
 
 	// Build container name → host port and display name mappings
-	containerHostPort := make(map[string]int)        // first host port per container
-	containerDisplay := make(map[string]string)       // display name per container
-	containerPortMap := make(map[string]map[int]int)  // container: containerPort→hostPort
+	containerHostPort := make(map[string]int)           // first host port per container
+	containerDisplay := make(map[string]string)         // display name per container
+	containerPortMap := make(map[string]map[int]int)    // container: containerPort→hostPort
 	containerListening := make(map[string]map[int]bool) // container: set of listening container ports
 	for _, lp := range dockerPorts {
 		name := lp.DockerContainer
