@@ -129,3 +129,56 @@ func graceMs(opts killer.Options) int {
 	}
 	return int(opts.Grace.Milliseconds())
 }
+
+// killSession is `sonar kill --session <id>`: the session form of `-g`,
+// answered by `sessions.kill` for the same reason `-g` is answered by
+// `groups.kill` — the daemon owns the membership, so it does the selecting.
+// There is no direct-scan path: a session only exists in the daemon.
+func killSession(ctx context.Context) error {
+	id, err := currentSession(killSessionFlag)
+	if err != nil {
+		return err
+	}
+	c, err := sessionsDaemon(ctx)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	snapshot, err := daemonList(ctx, c, rpc.PortsListParams{All: true})
+	if err != nil {
+		return cliError(err)
+	}
+
+	call := func(dryRun bool) ([]killer.Result, error) {
+		var env rpc.KillEnvelope
+		err := c.Call(ctx, "sessions.kill", rpc.SessionsKillParams{
+			ID:     id,
+			Tree:   killTreeFlag,
+			Force:  forceFlag,
+			DryRun: dryRun,
+		}, &env)
+		return env.Results, err
+	}
+
+	if !killYesFlag && !killDryRunFlag {
+		plan, err := call(true)
+		if err != nil {
+			return cliError(err)
+		}
+		if len(plan) == 0 {
+			fmt.Printf("Session %s has nothing running.\n", id)
+			return nil
+		}
+		if !confirmPlan(plan, snapshot) {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+
+	results, err := call(killDryRunFlag)
+	if err != nil {
+		return cliError(err)
+	}
+	return reportKill(os.Stdout, results, snapshot, killJSONFlag, killDryRunFlag)
+}

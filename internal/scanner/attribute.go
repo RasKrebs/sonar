@@ -56,6 +56,32 @@ func (l *Loop) SetRuns(f func() groups.Registry) {
 	l.opts.Runs = f
 }
 
+// SetSessions installs the sessions-collection builder. Like SetRuns it is a
+// setter because the daemon extension that owns sessions registers itself
+// after the loop is already scanning.
+func (l *Loop) SetSessions(f func(ports []state.Port) []state.SessionRecord) {
+	if f == nil {
+		return
+	}
+	l.attr.mu.Lock()
+	defer l.attr.mu.Unlock()
+	l.opts.Sessions = f
+}
+
+// sessions builds the snapshot's sessions collection, never nil.
+func (l *Loop) sessions(rows []state.Port) []state.SessionRecord {
+	l.attr.mu.Lock()
+	build := l.opts.Sessions
+	l.attr.mu.Unlock()
+	if build == nil {
+		return []state.SessionRecord{}
+	}
+	if out := build(rows); out != nil {
+		return out
+	}
+	return []state.SessionRecord{}
+}
+
 // Invalidate drops the cached scan so the next read rescans instead of serving
 // state from before a write. `ports.rename` and `groups.assign` call it so the
 // caller sees its own change in the very next list.

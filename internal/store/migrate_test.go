@@ -172,3 +172,47 @@ func TestReservedVersionsAreFree(t *testing.T) {
 		}
 	}
 }
+
+// A migration registered below the highest applied version is still applied:
+// versions 003-006 belong to sibling packages, so a database can legitimately
+// reach 006 in a build that has no 005 linked in.
+func TestMigrateFillsAGapBelowTheHighestVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sonar.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Pretend a build with a later reserved migration has already run here.
+	if _, err := s.DB().Exec(
+		`INSERT INTO schema_version(version, name, applied_at) VALUES(?, 'later', ?)`,
+		VersionClaims, nowString()); err != nil {
+		t.Fatalf("recording a later version: %v", err)
+	}
+	// And that this build's migration 002 was never applied.
+	if _, err := s.DB().Exec(`DELETE FROM schema_version WHERE version = ?`, VersionIndexes); err != nil {
+		t.Fatalf("removing the 002 row: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	applied, err := appliedVersions(reopened.DB())
+	if err != nil {
+		t.Fatalf("appliedVersions: %v", err)
+	}
+	if !applied[VersionIndexes] {
+		t.Errorf("migration %03d was not applied under a higher version: %v", VersionIndexes, applied)
+	}
+	if !applied[VersionClaims] {
+		t.Errorf("the pre-existing version row was lost: %v", applied)
+	}
+	if !tableExists(t, reopened.DB(), "known_roots") {
+		t.Error("migration 002 did not run")
+	}
+}

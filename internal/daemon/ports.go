@@ -110,6 +110,9 @@ func handlePortsList(_ context.Context, req *Request) (any, error) {
 		if p.Group != nil && *p.Group != "" && !inGroup(row, *p.Group) {
 			continue
 		}
+		if p.Session != nil && *p.Session != "" && !inSession(row, *p.Session) {
+			continue
+		}
 		out = append(out, filterPort(row, include))
 	}
 	return rpc.PortsListResult{Ports: out}, nil
@@ -125,6 +128,16 @@ func inGroup(p state.Port, group string) bool {
 		return true
 	}
 	return false
+}
+
+// inSession matches a port against a session id, accepting the same unique
+// prefix `sonar sessions <id>` accepts so the two commands take the same
+// argument.
+func inSession(p state.Port, id string) bool {
+	if p.Session == nil {
+		return false
+	}
+	return p.Session.ID == id || strings.HasPrefix(p.Session.ID, id)
 }
 
 // normalizeIPVersion accepts both the wire's "IPv4"/"IPv6" and the shorthand

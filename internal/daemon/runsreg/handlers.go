@@ -11,8 +11,10 @@ import (
 	"github.com/raskrebs/sonar/internal/daemon"
 	"github.com/raskrebs/sonar/internal/daemon/rpc"
 	"github.com/raskrebs/sonar/internal/scanner"
+	"github.com/raskrebs/sonar/internal/sessions"
 	"github.com/raskrebs/sonar/internal/spawn"
 	"github.com/raskrebs/sonar/internal/state"
+	"github.com/raskrebs/sonar/internal/store"
 )
 
 // Default is the registry this daemon serves. One daemon, one registry: the
@@ -105,8 +107,12 @@ func handleRegister(_ context.Context, req *daemon.Request) (any, error) {
 	if t, err := time.Parse(time.RFC3339, p.StartedAt); err == nil {
 		rec.StartedAt = t
 	}
+	if p.Session != nil && p.Session.ID != "" {
+		rec.Session = *p.Session
+	}
 
 	rec = Default.Register(rec)
+	rememberSession(req.Runtime, rec.Session)
 	req.Runtime.Logger.Debug("run registered",
 		"id", rec.ID, "pid", rec.PID, "group", rec.Group, "name", rec.Name)
 	// The next scan should see the new run's ports, not wait out the backoff.
@@ -159,6 +165,20 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		hint = *p.PortHint
 	}
 
+	// The daemon's own environment says nothing about the agent that called
+	// it, so a session has to be sent: `runs.spawn {session}` when the caller
+	// captured one, otherwise whatever the request's own env carries.
+	session := state.Session{}
+	if p.Session != nil {
+		session = *p.Session
+	}
+	if session.ID == "" {
+		if s, ok := sessions.DetectFromEnv(envSlice(p.Env), sessions.Options{}); ok {
+			s.Worktree, s.Branch = sessions.GitContext(cwd)
+			session = s
+		}
+	}
+
 	h, err := Spawn(ctx, req.Runtime, spawn.Request{
 		Argv:     p.Argv,
 		Cwd:      cwd,
@@ -166,6 +186,7 @@ func handleSpawn(ctx context.Context, req *daemon.Request) (any, error) {
 		Group:    res.Group,
 		Name:     res.Name,
 		PortHint: hint,
+		Session:  session,
 		Detach:   true,
 	})
 	if err != nil {
@@ -207,7 +228,9 @@ func Spawn(ctx context.Context, rt *daemon.Runtime, req spawn.Request) (*spawn.H
 		Cwd:       h.Cwd,
 		PortHint:  h.PortHint,
 		StartedAt: h.StartedAt,
+		Session:   h.Session,
 	})
+	rememberSession(rt, h.Session)
 	rt.Logger.Info("spawned a run",
 		"id", h.ID, "pid", h.PID, "group", h.Group, "name", h.Name, "log", h.LogPath)
 	rt.Scanner.Wake()
@@ -221,6 +244,33 @@ func Spawn(ctx context.Context, rt *daemon.Runtime, req spawn.Request) (*spawn.H
 		rt.Scanner.Wake()
 	}(rt, h)
 	return h, nil
+}
+
+// rememberSession writes a session through to the store the moment a run
+// carries one, so an agent's session survives a daemon restart and stays
+// readable for the seven days after its last run exits.
+func rememberSession(rt *daemon.Runtime, s state.Session) {
+	if s.ID == "" || rt == nil || rt.Store == nil {
+		return
+	}
+	now := time.Now()
+	err := rt.Store.Sessions().Upsert(store.SessionRow{
+		ID: s.ID, Tool: s.Tool, Label: s.Label,
+		Worktree: s.Worktree, Branch: s.Branch, Detected: s.Detected,
+		FirstSeen: now, LastSeen: now,
+	})
+	if err != nil {
+		rt.Logger.Warn("recording an agent session", "session", s.ID, "error", err)
+	}
+}
+
+// envSlice renders a wire env map as the KEY=VALUE slice detection reads.
+func envSlice(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // CheckCwd cleans a working directory and enforces the home-directory rule.

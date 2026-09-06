@@ -58,6 +58,7 @@ func AttributeWith(pp []ports.ListeningPort, pins Pins, runs Registry, index *In
 	stampRuns(pp, runs)
 
 	resolved := Resolve(state.FromListeningAll(pp), pins, runs, index)
+	stampSessions(resolved, runs)
 	for i := range resolved {
 		pp[i].ProjectRoot = deref(resolved[i].ProjectRoot)
 		pp[i].Group = deref(resolved[i].Group)
@@ -74,6 +75,27 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// stampSessions puts the agent session of the owning run onto every port it
+// owns, from the same registry and the same ancestry walk that decided the
+// run. It runs after Resolve because it stamps the contract rows, not the
+// scanner rows: `session` is a daemon concept with no place in `runs.json`, so
+// the direct-scan path has nothing to stamp and this is a no-op there.
+func stampSessions(resolved []state.Port, runs Registry) {
+	reg, ok := runs.(SessionRegistry)
+	if !ok {
+		return
+	}
+	for i := range resolved {
+		if resolved[i].PID <= 0 {
+			continue
+		}
+		if s, found := reg.Session(resolved[i]); found && s.ID != "" {
+			session := s
+			resolved[i].Session = &session
+		}
+	}
 }
 
 // stampRuns writes the registry's run attribution onto the scan rows before

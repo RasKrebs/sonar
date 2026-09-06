@@ -18,7 +18,9 @@ import (
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/runs"
 	"github.com/raskrebs/sonar/internal/selfupdate"
+	"github.com/raskrebs/sonar/internal/sessions"
 	"github.com/raskrebs/sonar/internal/spawn"
+	"github.com/raskrebs/sonar/internal/state"
 	"github.com/spf13/cobra"
 
 	// The daemon serves runs.register/unregister/list/spawn from this package's
@@ -33,6 +35,10 @@ var (
 	startDetach bool
 	startList   bool
 	startJSON   bool
+
+	// startSession is the agent session this invocation belongs to, detected
+	// once in startRun and carried into whichever spawn path runs.
+	startSession state.Session
 )
 
 // registerTimeout bounds the daemon round-trips around a run. A slow or absent
@@ -83,6 +89,12 @@ func startRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolving the working directory: %w", err)
 	}
 	res := spawn.Resolve(cwd, args, startGroup, startName)
+	// The agent session is detected here, in the process the agent actually
+	// spawned: the daemon's own environment is a service manager's, not an
+	// agent's, so it could never detect this (spec 2 §3).
+	session, _ := sessions.Capture(cwd, sessions.Options{})
+
+	startSession = session
 
 	if startDetach {
 		return startDetached(cmd, args, cwd, res)
@@ -106,6 +118,7 @@ func startAttached(cmd *cobra.Command, argv []string, cwd string, res spawn.Reso
 		Group:    res.Group,
 		Name:     res.Name,
 		PortHint: startPort,
+		Session:  startSession,
 	})
 	if err != nil {
 		return err
@@ -145,6 +158,10 @@ func startDetached(cmd *cobra.Command, argv []string, cwd string, res spawn.Reso
 			// The CLI is the user: it may start commands anywhere.
 			AllowOutsideHome: true,
 		}
+		if startSession.ID != "" {
+			s := startSession
+			params.Session = &s
+		}
 		if startPort > 0 {
 			hint := startPort
 			params.PortHint = &hint
@@ -166,6 +183,7 @@ func startDetached(cmd *cobra.Command, argv []string, cwd string, res spawn.Reso
 		Group:    res.Group,
 		Name:     res.Name,
 		PortHint: startPort,
+		Session:  startSession,
 		Detach:   true,
 	})
 	if err != nil {
@@ -203,6 +221,10 @@ func registerRun(h *spawn.Handle) bool {
 			StartedAt:        h.StartedAt.Format(time.RFC3339),
 			ID:               &h.ID,
 			AllowOutsideHome: true,
+		}
+		if h.Session.ID != "" {
+			s := h.Session
+			params.Session = &s
 		}
 		if h.PortHint > 0 {
 			hint := h.PortHint

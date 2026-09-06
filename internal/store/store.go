@@ -6,6 +6,13 @@
 // so CGO_ENABLED=0 release builds keep working.
 //
 // Only the daemon opens the store. The CLI's no-daemon path never touches it.
+//
+// Migrations are tracked per version, not by a high-water mark: schema_version
+// holds one row per applied migration and Open applies every registered
+// version that has no row. Versions 003-006 are reserved for sibling packages
+// (contract §8), so which of them a binary knows about depends on what it
+// links; a database that reached 006 without 005 registered still receives 005
+// the first time a build that owns it opens the file.
 package store
 
 import (

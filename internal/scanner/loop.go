@@ -66,6 +66,12 @@ type Options struct {
 	// built; nil, or a nil return, means groups.PortRuns{}.
 	Runs func() groups.Registry
 
+	// Sessions builds the snapshot's `sessions` collection from the ports the
+	// tick just resolved. It is a function for the same reason Runs is: the
+	// daemon installs it from an OnStart hook, after the loop exists. Nil
+	// publishes an empty collection.
+	Sessions func(ports []state.Port) []state.SessionRecord
+
 	// Scan overrides the OS scan. Tests inject a fake; production leaves it nil
 	// and gets ports.Scan + docker.EnrichPorts + ports.Enrich.
 	Scan func(include Include) ([]ports.ListeningPort, error)
@@ -279,6 +285,8 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 	// is assembled: what gets published is already attributed and named.
 	rows, groupRows := l.attribute(pp)
 
+	sessionRows := l.sessions(rows)
+
 	// Configured health comes after attribution because it is the groups that
 	// say which port has a `health:` path. It runs on every tick regardless of
 	// `include`: a health path in a `.sonar.yaml` is part of what the service
@@ -308,11 +316,11 @@ func (l *Loop) scanLocked(include Include) (next, prev state.Snapshot, changed b
 		DaemonVersion: l.opts.DaemonVersion,
 		Ports:         rows,
 		Groups:        groupRows,
-		// Tunnels, proxies and sessions belong to specs 2 and 3. Every
-		// collection is always an array, never null.
+		// Tunnels and proxies belong to spec 3. Every collection is always an
+		// array, never null.
 		Tunnels:  []state.Tunnel{},
 		Proxies:  []state.Proxy{},
-		Sessions: []state.SessionRecord{},
+		Sessions: sessionRows,
 	}
 
 	if l.haveSnap && !snapshotChanged(prev, next, include.Stats) {
@@ -368,7 +376,8 @@ func snapshotChanged(prev, next state.Snapshot, withStats bool) bool {
 		d = state.DiffWithStats(prev, next)
 	}
 	return len(d.Ports.Added) > 0 || len(d.Ports.Updated) > 0 || len(d.Ports.Removed) > 0 ||
-		len(d.Groups.Added) > 0 || len(d.Groups.Updated) > 0 || len(d.Groups.Removed) > 0
+		len(d.Groups.Added) > 0 || len(d.Groups.Updated) > 0 || len(d.Groups.Removed) > 0 ||
+		len(d.Sessions.Added) > 0 || len(d.Sessions.Updated) > 0 || len(d.Sessions.Removed) > 0
 }
 
 // carryHealth copies health results from the previous snapshot onto rows that

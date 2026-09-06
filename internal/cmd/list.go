@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -29,6 +30,7 @@ var (
 	ipv4Flag       bool
 	ipv6Flag       bool
 	groupFlag      string
+	sessionFlag    string
 	tagFlag        string
 	treeFlag       bool
 )
@@ -53,6 +55,8 @@ func init() {
 	listCmd.Flags().BoolVarP(&ipv4Flag, "ipv4", "4", false, "Show only IPv4 ports")
 	listCmd.Flags().BoolVarP(&ipv6Flag, "ipv6", "6", false, "Show only IPv6 ports")
 	listCmd.Flags().StringVar(&groupFlag, "group", "", "Show only ports in this `group`")
+	listCmd.Flags().StringVar(&sessionFlag, "session", "",
+		"Show only the ports an agent `session` started (`current` is this shell's own)")
 	listCmd.Flags().StringVar(&tagFlag, "tag", "", "Alias of --group, kept for one release")
 	listCmd.Flags().BoolVar(&treeFlag, "tree", false, "Group the ports into a tree instead of a table")
 	listCmd.MarkFlagsMutuallyExclusive("ipv4", "ipv6")
@@ -78,10 +82,16 @@ func listRun(cmd *cobra.Command, args []string) error {
 		ipVersion = "IPv6"
 	}
 
+	session, err := currentSession(sessionFlag)
+	if err != nil {
+		return err
+	}
+
 	results, index, err := listPorts(cmd.Context(), listQuery{
 		showApps:  showApps,
 		filter:    activeFilter,
 		group:     group,
+		session:   session,
 		ipVersion: ipVersion,
 	})
 	if err != nil {
@@ -113,6 +123,11 @@ func listRun(cmd *cobra.Command, args []string) error {
 	}
 	return nil
 }
+
+// errSessionNeedsDaemon is what --session says when nothing is listening on
+// the daemon socket.
+var errSessionNeedsDaemon = errors.New(
+	"--session needs a running daemon; start one with `sonar serve --detach`")
 
 // hasHiddenProcesses reports whether the scan ran unprivileged and at least one
 // listening socket came back without a resolvable process name — the signature
@@ -232,6 +247,7 @@ type listQuery struct {
 	showApps  bool
 	filter    string
 	group     string
+	session   string
 	ipVersion string
 }
 
@@ -240,6 +256,9 @@ type listQuery struct {
 // a one-line note otherwise. The group index is only built on the direct path;
 // through the daemon the tree view derives what it needs from the rows.
 func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups.Index, error) {
+	if hostFlag != "" && q.session != "" {
+		return nil, nil, errors.New("--session and --host cannot be combined: a session is local daemon state")
+	}
 	if hostFlag != "" {
 		// A remote host is scanned over SSH; the local daemon knows nothing
 		// about it.
@@ -257,6 +276,7 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 		defer c.Close()
 		rows, err := daemonList(ctx, c, rpc.PortsListParams{
 			Group:     strPtrOrNil(q.group),
+			Session:   strPtrOrNil(q.session),
 			Filter:    strPtrOrNil(q.filter),
 			All:       q.showApps,
 			IPVersion: strPtrOrNil(q.ipVersion),
@@ -268,6 +288,13 @@ func listPorts(ctx context.Context, q listQuery) ([]ports.ListeningPort, *groups
 		// A daemon that answered with an error is a real failure, not a
 		// reason to scan twice.
 		return nil, nil, err
+	}
+
+	if q.session != "" {
+		// A session is daemon state: it lives in the run registry and the
+		// database, and a direct scan has no way to know one existed. Saying
+		// so beats printing an empty table (contract §20).
+		return nil, nil, errSessionNeedsDaemon
 	}
 
 	results, err := ports.Scan()

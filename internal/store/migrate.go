@@ -17,6 +17,15 @@ var migrationFS embed.FS
 // Migration is one forward-only schema step. Every migration runs inside a
 // transaction together with the schema_version row that records it, so a
 // failed migration leaves the database on the previous version.
+//
+// schema_version records *every* applied version, one row each, and migrate
+// applies every registered version that has no row — not everything above the
+// highest one. The distinction matters because the reserved versions 003–006
+// are registered by sibling packages (contract §8), so which migrations a
+// given binary knows about depends on what it links: a database that reached
+// 006 under a build with claims but without sessions must still receive 005
+// the first time a build with sessions opens it. Comparing against
+// MAX(version) would have skipped it forever.
 type Migration struct {
 	Version int
 	Name    string
@@ -145,12 +154,14 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schemaVersionDDL); err != nil {
 		return fmt.Errorf("creating schema_version: %w", err)
 	}
-	current, err := schemaVersion(db)
+	applied, err := appliedVersions(db)
 	if err != nil {
 		return err
 	}
+	// registeredMigrations is already in ascending version order, so a gap is
+	// filled in the order its author wrote it in.
 	for _, m := range registeredMigrations() {
-		if m.Version <= current {
+		if applied[m.Version] {
 			continue
 		}
 		if err := applyMigration(db, m); err != nil {
@@ -158,6 +169,27 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// appliedVersions is the set of versions this database has already run. A
+// version recorded here is never re-applied; one that is registered but
+// missing is applied on the next open, wherever it sits in the order.
+func appliedVersions(db *sql.DB) (map[int]bool, error) {
+	rows, err := db.Query(`SELECT version FROM schema_version`)
+	if err != nil {
+		return nil, fmt.Errorf("reading schema_version: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	applied := map[int]bool{}
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("reading schema_version: %w", err)
+		}
+		applied[v] = true
+	}
+	return applied, rows.Err()
 }
 
 func applyMigration(db *sql.DB, m Migration) error {
@@ -182,7 +214,9 @@ func applyMigration(db *sql.DB, m Migration) error {
 	return nil
 }
 
-// schemaVersion reads the highest applied version, 0 for a fresh database.
+// schemaVersion reads the highest applied version, 0 for a fresh database. It
+// is what Version() reports; migrate works from the whole applied set, not
+// from this number.
 func schemaVersion(db *sql.DB) (int, error) {
 	var v sql.NullInt64
 	if err := db.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&v); err != nil {

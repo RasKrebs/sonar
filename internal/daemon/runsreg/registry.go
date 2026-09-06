@@ -17,6 +17,7 @@ import (
 
 	"github.com/raskrebs/sonar/internal/ports"
 	"github.com/raskrebs/sonar/internal/runs"
+	"github.com/raskrebs/sonar/internal/sessions"
 	"github.com/raskrebs/sonar/internal/state"
 )
 
@@ -38,6 +39,10 @@ type Record struct {
 	Cwd       string
 	PortHint  int
 	StartedAt time.Time
+	// Session is the agent session that asked for this run, or the zero value
+	// when nothing did (spec 2 §3). It travels with the run so every port the
+	// run opens can be stamped with it.
+	Session state.Session
 }
 
 // Registry holds the live runs. The zero value is not usable; call New.
@@ -168,6 +173,42 @@ func (r *Registry) Run(p state.Port) (state.Run, bool) {
 		return *p.Run, true
 	}
 	return state.Run{}, false
+}
+
+// Session implements groups.SessionRegistry: it reports the agent session that
+// started the run owning this port, using the same PPID walk the run
+// attribution uses, so a port and its run can never disagree about who started
+// them.
+func (r *Registry) Session(p state.Port) (state.Session, bool) {
+	rec, found := r.ancestor(p.PID, p.PPID)
+	if !found || rec.Session.ID == "" {
+		return state.Session{}, false
+	}
+	return rec.Session, true
+}
+
+// SessionRuns lists every live run that carries a session. The daemon's
+// sessions handlers read it through an interface assertion on the installed
+// run registry, which is how package daemon reaches this data without
+// importing the package that registers itself into it.
+func (r *Registry) SessionRuns() []sessions.Live {
+	out := []sessions.Live{}
+	for _, rec := range r.List() {
+		if rec.Session.ID == "" {
+			continue
+		}
+		out = append(out, sessions.Live{
+			RunID:     rec.ID,
+			PID:       rec.PID,
+			Group:     rec.Group,
+			Name:      rec.Name,
+			Cmd:       rec.Cmd,
+			Cwd:       rec.Cwd,
+			StartedAt: rec.StartedAt,
+			Session:   rec.Session,
+		})
+	}
+	return out
 }
 
 // ancestor walks up from pid looking for a registered run. hintPPID is the

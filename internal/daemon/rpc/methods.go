@@ -108,6 +108,10 @@ type PortsListParams struct {
 	All       bool    `json:"all,omitempty"`
 	IPVersion *string `json:"ip_version,omitempty"`
 	Include   Include `json:"include,omitempty"`
+	// Session keeps only the ports an agent session started (spec 2 §3). It
+	// is a daemon-side filter because a session lives in the daemon, not in
+	// the scan.
+	Session *string `json:"session,omitempty"`
 }
 
 type PortsListResult struct {
@@ -377,6 +381,10 @@ type RunsRegisterParams struct {
 	PortHint  *int    `json:"port_hint,omitempty"`
 	StartedAt string  `json:"started_at"`
 	ID        *string `json:"id,omitempty"`
+	// Session is the agent session that asked for this run (spec 2 §3). The
+	// caller detects it: `sonar start` reads its own environment, which is the
+	// agent's, while the daemon's is not.
+	Session *state.Session `json:"session,omitempty"`
 	// AllowOutsideHome opts out of the daemon's refusal to record a run whose
 	// cwd is outside the user's home (daemon spec, "Transport details"). The
 	// CLI sets it; the MCP server does not.
@@ -418,7 +426,7 @@ type RunsSpawnParams struct {
 	Group            *string           `json:"group,omitempty"`
 	Name             *string           `json:"name,omitempty"`
 	PortHint         *int              `json:"port_hint,omitempty"`
-	Session          *string           `json:"session,omitempty"`
+	Session          *state.Session    `json:"session,omitempty"`
 	AllowOutsideHome bool              `json:"allow_outside_home,omitempty"`
 }
 
