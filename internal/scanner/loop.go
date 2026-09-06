@@ -39,6 +39,16 @@ const (
 	HealthTimeout = 2 * time.Second
 	// HostStatsTimeout bounds one collection of the machine's own load.
 	HostStatsTimeout = 3 * time.Second
+	// StatsInterval is the fixed cadence of the stats-only tick: per-process
+	// cpu and memory plus this machine's load row, sampled without a port
+	// scan behind it. Unlike the scan interval it never backs off, and it
+	// only runs while someone is subscribed.
+	StatsInterval = 1 * time.Second
+	// MinStatsInterval is the floor `daemon.stats_interval` may be set to.
+	// Below it the sampler costs more than the numbers it publishes are
+	// worth: every tick is a `ps` per machine on Unix and a PowerShell on
+	// Windows.
+	MinStatsInterval = 250 * time.Millisecond
 )
 
 // Include is the per-subscriber opt-in from `state.subscribe {include}`.
@@ -117,6 +127,16 @@ type Options struct {
 	// never opens a real socket.
 	Probe Probe
 
+	// SampleStats reads cpu, memory, state and uptime for pids the last
+	// snapshot already named — the stats-only tick's one OS call. Tests
+	// inject a fake; production leaves it nil and gets ports.SampleProcStats.
+	SampleStats func(pids []int) map[int]ports.ProcSample
+
+	// StatsInterval overrides the stats-only tick's cadence
+	// (`daemon.stats_interval`). Zero means StatsInterval; anything below
+	// MinStatsInterval is clamped to it.
+	StatsInterval time.Duration
+
 	// Now overrides the clock, for tests.
 	Now func() time.Time
 }
@@ -127,6 +147,9 @@ type Loop struct {
 	now  func() time.Time
 
 	wake chan struct{}
+	// statsWake unparks the stats-only tick when a subscriber connects. It is
+	// separate from wake so the two ticks can park and resume independently.
+	statsWake chan struct{}
 
 	attr attribution
 
@@ -182,15 +205,19 @@ func New(opts Options) *Loop {
 	if opts.HostStats == nil {
 		opts.HostStats = hoststats.New().Collect
 	}
+	if opts.SampleStats == nil {
+		opts.SampleStats = ports.SampleProcStats
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Loop{
-		opts:     opts,
-		now:      now,
-		wake:     make(chan struct{}, 1),
-		interval: BaseInterval,
+		opts:      opts,
+		now:       now,
+		wake:      make(chan struct{}, 1),
+		statsWake: make(chan struct{}, 1),
+		interval:  BaseInterval,
 	}
 }
 
@@ -335,11 +362,29 @@ func (l *Loop) Wake() {
 	case l.wake <- struct{}{}:
 	default:
 	}
+	select {
+	case l.statsWake <- struct{}{}:
+	default:
+	}
 }
 
 // Run drives the loop until ctx is cancelled. With zero subscribers it parks on
 // Wake and does no work at all; the next RPC or subscription starts it again.
+//
+// It also runs the stats-only tick (see runStats) in a second goroutine, and
+// returns only once both have stopped. The two are serialized against each
+// other by scanMu, never by being the same goroutine: the whole point is that
+// a 1 s load sample does not have to wait for — or reset — an adaptive port
+// scan that may be 5 s apart.
 func (l *Loop) Run(ctx context.Context) {
+	var stats sync.WaitGroup
+	stats.Add(1)
+	go func() {
+		defer stats.Done()
+		l.runStats(ctx)
+	}()
+	defer stats.Wait()
+
 	timer := time.NewTimer(time.Hour)
 	defer timer.Stop()
 
