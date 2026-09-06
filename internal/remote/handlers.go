@@ -159,6 +159,12 @@ func handleRemove(_ context.Context, req *daemon.Request) (any, error) {
 // same rules as the local one, so there is no read-only mode (remote-hosts
 // spec, decision 3).
 //
+// It is the generic form of the `host` field every method now takes, and takes
+// exactly the same path (contract §43): a streaming method streams, and the
+// rows that come back say which host they are from rather than calling
+// themselves "localhost". The params are still passed through untouched — a
+// caller that spells the method out is spelling its params out too.
+//
 // `remote.call` is deliberately not a recursion guard's business: the far side
 // subscribes to nothing but its own machine, so forwarding `remote.call` to a
 // host that has hosts of its own reaches exactly one level, which is what a
