@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,19 @@ func (h *testHarness) dial(ctx context.Context) *testClient {
 	return c
 }
 
+// rpcDeadline bounds one test request/response. It is a guard against a hung
+// dispatcher, not a performance assertion, so Windows gets a much longer one:
+// `ports.kill` resolves its targets through the killer's own OS scan (contract
+// §25 rescans before selecting), and that scan shells out to PowerShell and to
+// `docker`, which on a cold CI runner takes many seconds. Three seconds there
+// times out a working call.
+func rpcDeadline() time.Duration {
+	if runtime.GOOS == "windows" {
+		return 30 * time.Second
+	}
+	return 3 * time.Second
+}
+
 type testClient struct {
 	t    *testing.T
 	conn net.Conn
@@ -80,7 +94,7 @@ func (c *testClient) send(method string, params any) string {
 	if err != nil {
 		c.t.Fatalf("marshalling params: %v", err)
 	}
-	c.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	c.conn.SetWriteDeadline(time.Now().Add(rpcDeadline()))
 	if err := json.NewEncoder(c.conn).Encode(rpc.Request{
 		JSONRPC: rpc.Version, ID: id, Method: method, Params: raw,
 	}); err != nil {
@@ -92,7 +106,7 @@ func (c *testClient) send(method string, params any) string {
 // read returns the next message from the daemon.
 func (c *testClient) read() rpc.Message {
 	c.t.Helper()
-	c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(rpcDeadline()))
 	line, err := c.r.ReadBytes('\n')
 	if err != nil {
 		c.t.Fatalf("reading from daemon: %v", err)
