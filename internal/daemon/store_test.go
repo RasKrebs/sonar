@@ -13,12 +13,13 @@ import (
 	"github.com/raskrebs/sonar/internal/store"
 )
 
-// withStore opens a database for the harness the way Serve does.
+// withStore opens the daemon's database at path the way Serve does. Closing it is the harness's
+// job (see testHarness.shutdown): the store must outlive the scan loop that
+// writes history into it, and a cleanup registered here would run first.
 func (h *testHarness) withStore(path string) *store.Store {
 	h.t.Helper()
 	h.srv.opts.DBPath = path
 	h.srv.openStore()
-	h.t.Cleanup(h.srv.closeStore)
 	if h.srv.runtime.Store == nil {
 		h.t.Fatalf("no store opened at %s", path)
 	}
@@ -28,6 +29,9 @@ func (h *testHarness) withStore(path string) *store.Store {
 func TestStatusReportsTheDatabasePath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The database's directory is claimed before the harness exists, so the
+	// harness stops before the directory is removed.
+	path := filepath.Join(t.TempDir(), "sonar.db")
 	h := newHarness(t, ctx)
 	c := h.dial(ctx)
 
@@ -39,7 +43,6 @@ func TestStatusReportsTheDatabasePath(t *testing.T) {
 		t.Errorf("db_path = %q before the store is open, want empty", before.DBPath)
 	}
 
-	path := filepath.Join(t.TempDir(), "sonar.db")
 	h.withStore(path)
 
 	var after rpc.DaemonStatusResult

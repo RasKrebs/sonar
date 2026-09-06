@@ -17,8 +17,12 @@ import (
 // listening, which is what every write path needs.
 func storeHarness(t *testing.T, ctx context.Context, rows ...ports.ListeningPort) (*testHarness, *store.Store) {
 	t.Helper()
+	// The temp directory is claimed first so its removal is the last cleanup
+	// to run: the harness holds the database inside it and has to close it
+	// before anything deletes the file.
+	db := filepath.Join(t.TempDir(), "sonar.db")
 	h := newHarness(t, ctx)
-	st := h.withStore(filepath.Join(t.TempDir(), "sonar.db"))
+	st := h.withStore(db)
 	if len(rows) == 0 {
 		rows = []ports.ListeningPort{{
 			Port: 8123, PID: 42, Process: "python3", Command: "python3 -m http.server",
