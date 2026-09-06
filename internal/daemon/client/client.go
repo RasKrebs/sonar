@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,7 +58,7 @@ func (e *ProtocolMismatchError) Error() string {
 
 // Client is a connection to the daemon. It is safe for concurrent use.
 type Client struct {
-	conn   net.Conn
+	conn   io.ReadWriteCloser
 	enc    *rpc.Encoder
 	socket string
 	hello  rpc.DaemonHelloResult
@@ -105,7 +105,19 @@ func Dial(ctx context.Context, info ClientInfo) (*Client, error) {
 	return Connect(ctx, info)
 }
 
-func handshake(ctx context.Context, conn net.Conn, socket string, info ClientInfo) (*Client, error) {
+// Attach speaks the daemon protocol over an already-open stream instead of a
+// socket this package dialled. The remote-host bridge uses it: the stream is
+// the stdin/stdout of `ssh <host> sonar daemon stdio`, and the protocol on it
+// is byte-for-byte the one on the local socket, so the whole client — calls,
+// subscriptions, streams — works unchanged over SSH.
+//
+// label names the connection in errors and in Socket(); it is not dialled.
+// Closing the Client closes rwc.
+func Attach(ctx context.Context, rwc io.ReadWriteCloser, label string, info ClientInfo) (*Client, error) {
+	return handshake(ctx, rwc, label, info)
+}
+
+func handshake(ctx context.Context, conn io.ReadWriteCloser, socket string, info ClientInfo) (*Client, error) {
 	c := &Client{
 		conn:    conn,
 		enc:     rpc.NewEncoder(conn),
