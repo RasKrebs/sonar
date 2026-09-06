@@ -134,7 +134,7 @@ func namedTypes() []any {
 		state.Snapshot{}, state.Delta{}, state.Event{}, state.Service{},
 		state.Stats{}, state.Health{}, state.Docker{}, state.Run{},
 		state.KillResult{},
-		Error{}, MutationResult{}, KillEnvelope{},
+		Error{}, MutationResult{}, KillEnvelope{}, DoctorCheck{},
 		// The streaming envelopes (contract §1). A client needs the shape of
 		// {id, data} to read any stream at all, so it is a named definition
 		// rather than something every generator re-invents.
@@ -272,6 +272,7 @@ func init() {
 	Describe("daemon.shutdown", Empty{}, OKResult{}, nil, nil)
 	Describe("daemon.status", HostParams{}, DaemonStatusResult{}, nil, nil)
 	Describe("daemon.schema", Empty{}, DaemonSchemaResult{}, nil, nil)
+	Describe("daemon.doctor", DaemonDoctorParams{}, DaemonDoctorResult{}, nil, nil)
 
 	// State.
 	Describe("state.snapshot", StateSnapshotParams{}, state.Snapshot{}, nil, nil)
