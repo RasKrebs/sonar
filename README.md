@@ -435,6 +435,30 @@ is null rather than zero. Registered remote hosts join the same table in
 milestone 3. The command needs a running daemon: it is the daemon that holds the
 previous sample a percentage is measured against.
 
+### `sonar remote install`
+
+```sh
+sonar remote install deploy@203.0.113.7        # same version as this sonar
+sonar remote install hetzner --version v0.6.0  # a Host from ~/.ssh/config
+sonar remote install deploy@box --no-service   # the binary, no daemon
+```
+
+Puts sonar on a host you can already ssh to and starts its daemon there. The
+release archive is downloaded and checksummed **on the remote host** — nothing
+is copied from this machine — and the binary lands in `~/.local/bin/sonar`, so
+none of it needs root. The daemon runs as a systemd user unit where the host
+has one (`~/.config/systemd/user/sonar.service`), and detached where it does
+not; `loginctl enable-linger` is printed as advice when the user session would
+end at logout and take the daemon with it.
+
+The version installed is the version of the sonar you ran it from, so the two
+ends speak the same protocol. Running it again upgrades in place and restarts
+the daemon, which is what makes an install and an update the same command.
+
+The target goes to `ssh` untouched: a `Host` alias from `~/.ssh/config` works,
+and so do the `ProxyJump`, `IdentityFile` and `Port` it sets. `--identity` and
+`--ssh-arg` are there for the flags a config does not cover.
+
 ### The daemon
 
 One background process scans ports, resolves groups, polls health, keeps the

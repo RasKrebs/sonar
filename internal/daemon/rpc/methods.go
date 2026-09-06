@@ -536,6 +536,57 @@ type RemoteScanResult struct {
 	Ports []state.Port `json:"ports"`
 }
 
+// RemoteInstallParams installs sonar on an SSH target and starts its daemon
+// (spec 3 §"sonar remote install"). Target is what `ssh` receives, verbatim:
+// a `user@host`, or a Host alias from the caller's `~/.ssh/config`.
+//
+// Version defaults to the version of the daemon serving the call, so the two
+// ends match; a daemon that is itself a development build has no release to
+// name and fails rather than guessing one.
+type RemoteInstallParams struct {
+	Target    string   `json:"target"`
+	Name      string   `json:"name,omitempty"`
+	Version   string   `json:"version,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	SSHArgs   []string `json:"ssh_args,omitempty"`
+	NoService bool     `json:"no_service,omitempty"`
+}
+
+type RemoteInstallResult struct {
+	MutationResult
+	SubscriptionID string `json:"subscription_id"`
+}
+
+// RemoteInstallChunk is one step of the install as it happens: `download`,
+// `verify`, `extract`, `install`, `service`, `linger`, `check`, plus `connect`,
+// `detect` and `resolve` from the local side. A line the remote printed that
+// sonar did not tag arrives as step `remote`.
+type RemoteInstallChunk struct {
+	Step   string `json:"step"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// RemoteInstallEnd describes the host after a successful install. It is not a
+// state.Host: the fields a Host carries beyond these come from the daemon
+// bridge, which `remote.add` opens, not from the install.
+type RemoteInstallEnd struct {
+	Name    string `json:"name"`
+	Target  string `json:"target"`
+	Version string `json:"version"`
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	BinPath string `json:"bin_path"`
+	// Service is how the daemon starts on the remote: "systemd" for a user
+	// unit, "detached" for `sonar serve --detach`, "none" for --no-service.
+	Service       string `json:"service"`
+	DaemonRunning bool   `json:"daemon_running"`
+	DaemonPID     int    `json:"daemon_pid,omitempty"`
+	// LingerHint is the `loginctl enable-linger` command to run when the
+	// remote's systemd user session would end at logout, taking the daemon
+	// with it. Empty when lingering is already on or does not apply.
+	LingerHint string `json:"linger_hint,omitempty"`
+}
+
 // ---------------------------------------------------------------- expose ---
 
 type ExposeCreateParams struct {
