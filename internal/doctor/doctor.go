@@ -147,6 +147,7 @@ func checks() []check {
 		check{id: "hooks_installed", run: checkHooksInstalled},
 		check{id: "project_config", run: checkProjectConfig},
 		check{id: "docker", run: checkDocker},
+		check{id: "desktop_installed", run: checkDesktopInstalled},
 		check{id: "tray", run: checkTray},
 	)
 }
