@@ -74,6 +74,17 @@ func Load(path string) (*Config, error) {
 	return parse(abs, data)
 }
 
+// Parse validates config bytes as if they had been read from path. It is what
+// a caller rendering a config in memory — `groups.init` writing a curated
+// proposal — checks before putting anything on disk.
+func Parse(path string, data []byte) (*Config, error) {
+	abs := Canonical(path)
+	if abs == "" {
+		return nil, fmt.Errorf("no config path given")
+	}
+	return parse(abs, data)
+}
+
 func parse(abs string, data []byte) (*Config, error) {
 	dir := filepath.Dir(abs)
 

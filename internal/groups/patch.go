@@ -165,62 +165,11 @@ func (e *ServiceNotFoundError) Error() string {
 	return fmt.Sprintf("no service %q in %s", e.Name, e.Path)
 }
 
-// PatchServices applies edits to the services in a `.sonar.yaml` and writes the
-// file back. The rewrite goes through the YAML node API rather than
-// marshalling a struct, so comments, key order and the author's own formatting
-// survive an edit made from the desktop app (contract §13.2).
-//
-// The result is validated before anything is written: a patch that would make
-// the file invalid returns a *ConfigError and leaves the file untouched. The
-// returned Config is the file as it now stands.
+// PatchServices applies metadata edits to the services in a `.sonar.yaml` and
+// writes the file back. It is EditServices with only the patch list filled in;
+// see ConfigEdit for adding, renaming and removing services.
 func PatchServices(path string, edits []ServiceEdit) (*Config, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, err
-	}
-
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, &ConfigError{Path: abs, Problems: []string{err.Error()}}
-	}
-	root := documentRoot(&doc)
-	if root == nil || root.Kind != yaml.MappingNode {
-		return nil, &ConfigError{Path: abs, Problems: []string{"the file is not a YAML mapping"}}
-	}
-
-	services := mappingValue(root, "services")
-	for _, edit := range edits {
-		// The service is checked even for a patch that changes nothing: a
-		// caller naming a service that is not there has made a mistake, and an
-		// empty patch is not the place to swallow it.
-		svc := findService(services, edit.Name)
-		if svc == nil {
-			return nil, &ServiceNotFoundError{Path: abs, Name: edit.Name}
-		}
-		if edit.Patch.Empty() {
-			continue
-		}
-		applyPatch(svc, edit.Patch)
-	}
-
-	out, err := encode(&doc)
-	if err != nil {
-		return nil, err
-	}
-	// Validate the bytes that are about to hit the disk, not the node tree:
-	// what a later Load sees is what has to be valid.
-	cfg, err := parse(abs, out)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeConfigFile(abs, out); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return EditServices(path, ConfigEdit{Services: edits})
 }
 
 // applyPatch sets, replaces or removes each sent key of one service mapping.
@@ -235,9 +184,14 @@ func applyPatch(svc *yaml.Node, patch ServicePatch) {
 	}
 }
 
-// setKey replaces the value of an existing key in place — keeping the key's
-// comments and position — or inserts the pair where keyOrder says it belongs.
+// setKey sets a key of one service mapping, in keyOrder.
 func setKey(mapping *yaml.Node, key string, value *yaml.Node) {
+	setKeyIn(mapping, key, value, keyOrder)
+}
+
+// setKeyIn replaces the value of an existing key in place — keeping the key's
+// comments and position — or inserts the pair where order says it belongs.
+func setKeyIn(mapping *yaml.Node, key string, value *yaml.Node, order []string) {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		if mapping.Content[i].Value != key {
 			continue
@@ -248,27 +202,27 @@ func setKey(mapping *yaml.Node, key string, value *yaml.Node) {
 		return
 	}
 	pair := []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value}
-	at := insertionPoint(mapping, key)
+	at := insertionPoint(mapping, key, order)
 	mapping.Content = slices.Insert(mapping.Content, at, pair...)
 }
 
 // insertionPoint is the index in a mapping's Content where a new key belongs:
 // before the first key that sorts after it, and at the end otherwise.
-func insertionPoint(mapping *yaml.Node, key string) int {
-	rank := keyRank(key)
+func insertionPoint(mapping *yaml.Node, key string, order []string) int {
+	rank := keyRank(key, order)
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if keyRank(mapping.Content[i].Value) > rank {
+		if keyRank(mapping.Content[i].Value, order) > rank {
 			return i
 		}
 	}
 	return len(mapping.Content)
 }
 
-func keyRank(key string) int {
-	if i := slices.Index(keyOrder, key); i >= 0 {
+func keyRank(key string, order []string) int {
+	if i := slices.Index(order, key); i >= 0 {
 		return i
 	}
-	return len(keyOrder)
+	return len(order)
 }
 
 // removeKey drops a key and its value from a mapping.
@@ -330,9 +284,12 @@ func encode(doc *yaml.Node) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// writeConfigFile replaces a config atomically, keeping its current permissions so a
-// file the user chmodded stays that way.
-func writeConfigFile(path string, data []byte) error {
+// WriteConfigFile replaces a config atomically, keeping its current permissions so a
+// file the user chmodded stays that way. A caller that has already rendered the
+// bytes — `groups.init` merging into a file it just previewed — writes them
+// through here rather than through os.WriteFile, so a crash mid-write can never
+// leave a half a config behind.
+func WriteConfigFile(path string, data []byte) error {
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
