@@ -741,6 +741,7 @@ is 0 unless something **failed**, so `sonar doctor` belongs in a setup script.
 | `hooks_installed` | the optional Claude Code hooks are installed |
 | `project_config` | this project has a `.sonar.yaml` that loads |
 | `docker` | the docker CLI is there and its daemon answers |
+| `desktop_installed` | the desktop app is installed, and which version (`skip` on Windows) |
 | `tray` | the superseded macOS `sonar-tray` binary is still around |
 
 `--fix` applies only the repairs that are safe to make unattended, and asks
@@ -764,13 +765,71 @@ process; the three checks that are about the CLI binary you invoked
 The Sonar app is the same picture in a window and in the menu bar or system
 tray: groups down the side, ports in a grid with live stats and health, logs,
 and the buttons for everything above. It talks to the same daemon, so the CLI
-and the app never disagree. `sonar tray` launches it if it is installed and
-otherwise tells you where to get it:
-<https://github.com/raskrebs/sonar/releases>.
+and the app never disagree. `sonar install desktop` installs it and `sonar
+tray` launches it.
 
 Until the app ships, macOS release tarballs still carry the old `sonar-tray`
 menu bar binary, and `sonar tray` falls back to it when the app is not
 installed.
+
+### `sonar install desktop`
+
+The app is in beta and is not signed by Apple yet, so the CLI installs it:
+
+```sh
+brew install raskrebs/sonar/sonar && sonar install desktop
+```
+
+That is the whole tester setup. Sonar fetches a manifest of published builds,
+picks the one for your machine, checks its sha256 and its size, installs it,
+and opens it.
+
+**This is why the CLI does the download.** macOS attaches a quarantine
+attribute to anything a *browser* saves, and Gatekeeper refuses to open a
+quarantined app that Apple has not notarised. A file this CLI downloads never
+gets the attribute in the first place, so the beta opens with no prompt and no
+right-click-Open dance. Sonar neither sets nor strips quarantine attributes —
+there is nothing to strip.
+
+```sh
+sonar install desktop                    # install and launch
+sonar install desktop --no-launch        # install only
+sonar install desktop --update           # update; does nothing if current
+sonar install desktop --check            # exit 1 when an update is available
+sonar install desktop --version 0.1.0-beta.1
+sonar install desktop --force            # ask a running Sonar to quit first
+sonar install desktop --json             # for scripts
+```
+
+The command needs no network to tell you what it does:
+
+```sh
+sonar install desktop --help | grep -- '--no-launch'
+# check
+```
+
+Where it goes:
+
+| | |
+| --- | --- |
+| macOS | `/Applications/Sonar.app`, or `~/Applications/Sonar.app` when the first is not writable (sonar never uses `sudo`) |
+| Linux | `~/.local/opt/sonar-desktop/Sonar.AppImage`, plus a menu entry in `~/.local/share/applications` and a `sonar-desktop` link in `~/.local/bin` |
+| Windows | not yet — the command says so and exits 1 |
+
+`--dir` overrides the directory on both. On Linux, `--deb` installs the `.deb`
+through `apt`/`dpkg` instead of the AppImage, where the release publishes one.
+
+The install is atomic: the new app is unpacked beside the old one and swapped
+in with a rename, so a failed download never leaves you without a working app.
+If the app is open, sonar refuses rather than replacing a bundle underneath it;
+`--force` asks it to quit and waits up to ten seconds.
+
+`sonar install desktop` records `desktop.installed_version` and
+`desktop.installed_path` in `~/.config/sonar/config.yaml`, which is how `sonar
+tray` finds an app installed with `--dir` and how `sonar doctor`'s
+`desktop_installed` check knows the version. Where the builds come from is
+`desktop.download_base`, overridden by `SONAR_DESKTOP_BASE` and then by
+`--base` — point them at your own build to test one.
 
 ### `sonar relay`
 
@@ -874,6 +933,10 @@ one: `/proc` on Linux, `lsof` on macOS, and on Windows a read of the process's
 own PEB. So git-root groups, `project_root` and cwd-based names work the same
 everywhere, and `sonar init` can propose a `.sonar.yaml` from what is listening
 on any of the three.
+
+The desktop app is narrower for now: `sonar install desktop` installs it on
+macOS (Apple Silicon and Intel) and Linux (x86_64 and aarch64). On Windows the
+command says the app is not available yet and exits 1.
 
 The one gap is a 32-bit `sonar.exe` on 64-bit Windows: it cannot read a 64-bit
 process's memory, so those ports come back without a working directory and fall

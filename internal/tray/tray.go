@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/raskrebs/sonar/internal/config"
 )
 
 // DownloadURL is where the desktop app is published. It is a placeholder until
@@ -52,12 +54,17 @@ type Decision struct {
 // Env is the slice of the world the decision depends on, injected so the whole
 // table can be exercised on one host against a fake filesystem.
 type Env struct {
-	GOOS     string
-	Home     string
-	SelfDir  string // directory holding the sonar binary
-	Getenv   func(string) string
-	Exists   func(string) bool
-	LookPath func(string) (string, error)
+	GOOS    string
+	Home    string
+	SelfDir string // directory holding the sonar binary
+	// Configured is desktop.installed_path from the user's config: what
+	// `sonar install desktop` recorded. It is checked before the standard
+	// locations, so an app installed with --dir is still what `sonar tray`
+	// launches.
+	Configured string
+	Getenv     func(string) string
+	Exists     func(string) bool
+	LookPath   func(string) (string, error)
 }
 
 // osEnv is the real environment.
@@ -67,11 +74,13 @@ func osEnv() Env {
 	if self, err := os.Executable(); err == nil {
 		selfDir = filepath.Dir(self)
 	}
+	cfg, _ := config.Load()
 	return Env{
-		GOOS:    runtime.GOOS,
-		Home:    home,
-		SelfDir: selfDir,
-		Getenv:  os.Getenv,
+		GOOS:       runtime.GOOS,
+		Home:       home,
+		SelfDir:    selfDir,
+		Configured: cfg.Desktop.InstalledPath,
+		Getenv:     os.Getenv,
 		Exists: func(path string) bool {
 			_, err := os.Stat(path)
 			return err == nil
@@ -114,6 +123,14 @@ func findDesktopApp(env Env) (string, bool) {
 }
 
 func desktopCandidates(env Env) []string {
+	var configured []string
+	if env.Configured != "" {
+		configured = []string{env.Configured}
+	}
+	return append(configured, standardDesktopCandidates(env)...)
+}
+
+func standardDesktopCandidates(env Env) []string {
 	switch env.GOOS {
 	case "darwin":
 		out := []string{"/Applications/Sonar.app"}
@@ -143,7 +160,11 @@ func desktopCandidates(env Env) []string {
 	default:
 		out := []string{"/opt/Sonar/sonar-desktop", "/usr/bin/sonar-desktop", "/usr/local/bin/sonar-desktop"}
 		if env.Home != "" {
-			out = append(out, filepath.Join(env.Home, ".local", "bin", "sonar-desktop"))
+			// Where `sonar install desktop` puts the AppImage, and the symlink
+			// it points at it.
+			out = append(out,
+				filepath.Join(env.Home, ".local", "bin", "sonar-desktop"),
+				filepath.Join(env.Home, ".local", "opt", "sonar-desktop", "Sonar.AppImage"))
 		}
 		return out
 	}
@@ -212,7 +233,7 @@ func (e Env) getenv(key string) string {
 type NotInstalledError struct{ GOOS string }
 
 func (e *NotInstalledError) Error() string {
-	return fmt.Sprintf("the Sonar desktop app is not installed — download it from %s", DownloadURL)
+	return fmt.Sprintf("the Sonar desktop app is not installed — run `sonar install desktop` to get it (%s)", DownloadURL)
 }
 
 // Run launches whatever Decide found. detach only affects the Swift tray: the

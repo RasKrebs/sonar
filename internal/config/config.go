@@ -20,6 +20,24 @@ type Config struct {
 	// Remote holds the registered SSH hosts the daemon bridges to (see
 	// remote.go).
 	Remote RemoteConfig `yaml:"remote"`
+	// Desktop holds where the desktop app comes from and what
+	// `sonar install desktop` last put on this machine.
+	Desktop DesktopConfig `yaml:"desktop"`
+}
+
+// DesktopConfig is the desktop app's corner of the config. download_base is a
+// setting; the two installed_* keys are a record `sonar install desktop`
+// writes and `sonar tray`, `sonar doctor` and `--check` read, so an app
+// installed with --dir is still found and an update knows what it is
+// replacing.
+type DesktopConfig struct {
+	// DownloadBase overrides where the manifest and artifacts are fetched
+	// from. Empty means the built-in default.
+	DownloadBase string `yaml:"download_base"`
+	// InstalledVersion is the version of the app on this machine.
+	InstalledVersion string `yaml:"installed_version"`
+	// InstalledPath is where it was installed.
+	InstalledPath string `yaml:"installed_path"`
 }
 
 // DefaultIdleTimeout is how long `sonar serve` stays up with no clients, no
@@ -135,17 +153,22 @@ func Path() string {
 // missing file yields an empty Config with no warnings; a malformed file or
 // invalid values yield a Config with the bad settings dropped plus
 // human-readable warning strings for the caller to print.
-func Load() (*Config, []string) {
+func Load() (*Config, []string) { return LoadFrom(Path()) }
+
+// LoadFrom is Load against an explicit file. `sonar doctor` uses it: its
+// checks read the config path in its Env, which a test points at a fixture,
+// and going through Path() would read the developer's own file instead.
+func LoadFrom(path string) (*Config, []string) {
 	cfg := &Config{}
 
-	data, err := os.ReadFile(Path())
+	data, err := os.ReadFile(path)
 	if err != nil {
 		// Missing/unreadable file is not an error — run with defaults.
 		return cfg, nil
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return &Config{}, []string{fmt.Sprintf("ignoring %s: %v", Path(), err)}
+		return &Config{}, []string{fmt.Sprintf("ignoring %s: %v", path, err)}
 	}
 
 	warnings := validate(cfg)
@@ -198,6 +221,15 @@ const template = `# sonar configuration
 #       identity: ~/.ssh/id_ed25519
 #       remote_bin: ~/.local/bin/sonar
 
+# desktop:          # the Sonar desktop app
+#   # Where 'sonar install desktop' fetches desktop.json and the artifacts it
+#   # names. --base and SONAR_DESKTOP_BASE both win over this.
+#   download_base: https://github.com/raskrebs/sonar-desktop-releases/releases/latest/download
+#   # Written by 'sonar install desktop'; read by 'sonar tray', 'sonar doctor'
+#   # and 'sonar install desktop --check'. Edit only to point them elsewhere.
+#   installed_version: 0.1.0-beta.1
+#   installed_path: /Applications/Sonar.app
+
 # Environment overrides (no config key; set them in your shell):
 #   SONAR_DB       path to the database of names, pins and history
 #                  (default: sonar.db next to this file)
@@ -208,6 +240,9 @@ const template = `# sonar configuration
 #   SONAR_NO_AUTOSTART
 #                  set to 1 to stop clients starting a daemon that is not
 #                  already running; they report it as unavailable instead
+#   SONAR_DESKTOP_BASE
+#                  where 'sonar install desktop' looks, overriding
+#                  desktop.download_base
 `
 
 // WriteTemplate writes a commented starter config to Path(), creating the
