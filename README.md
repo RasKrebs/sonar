@@ -242,11 +242,13 @@ ports: [9229]        # ports that belong to this project without a service
 
 `.sonar.yml` is read if that is how you spell it; `sonar init` always writes
 `.sonar.yaml`. The daemon watches the projects it knows about and picks up
-edits to the file without a restart. When the desktop app edits a service the
-file is re-rendered from its own syntax tree, so comments, key order and layout
-survive — except that extra spaces lining a trailing comment up (`cmd: x     #
-note`) collapse to one, because the YAML library keeps the comment but not its
-column.
+edits to the file without a restart. Every edit sonar makes — from the desktop
+app, from `sonar groups add`, `rename` and `remove`, from an agent — goes
+through the daemon, which re-renders the file from its own syntax tree, so
+comments, key order and layout survive an edit that adds, renames or removes a
+service just as they survive a metadata change. The one exception: extra spaces
+lining a trailing comment up (`cmd: x     # note`) collapse to one, because the
+YAML library keeps the comment but not its column.
 
 ### `sonar up`
 
@@ -279,8 +281,14 @@ already running.
 
 ```sh
 sonar init --dry-run
+sonar init --service api:8000:/healthz --service web:5173
 sonar groups
 sonar groups --json
+
+group=$(basename "$PWD")           # sonar init names the group after the directory
+sonar groups add "$group" worker --port 9000 --cmd 'uv run worker' --depends-on api
+sonar groups rename "$group" worker jobs
+sonar groups remove "$group" jobs
 # check
 ```
 
@@ -293,6 +301,26 @@ that are declared but not running.
 `sonar init` writes a `.sonar.yaml` at the git root from what is listening right
 now — desktop apps and ports below 1024 left out. It refuses to overwrite
 without `--force`, and `--dry-run` prints the file instead of writing it.
+`--merge` appends to a file that is already there instead of refusing, and
+`--service name:port[:health]` — repeatable — writes the services you name
+instead of the ones it found, keeping the command it guessed for a port you
+kept. `--force` and `--merge` are mutually exclusive.
+
+`sonar groups add <group> <name> --port N` appends a service to that group's
+`.sonar.yaml`, with `--cmd`, `--cwd`, `--health`, `--description`, `--icon`,
+`--color` and a repeatable `--depends-on` for the rest of it. `sonar groups
+rename <group> <old> <new>` renames one everywhere in the file, `depends_on`
+references included, and `sonar groups remove <group> <name>` deletes one and
+drops it from every `depends_on` that named it. All three refuse an edit that
+would leave the file invalid — a duplicate name, a port another service already
+claims, a service that is not there — and none of them writes a byte until the
+whole edit is known to be good.
+
+The daemon does the writing, which is why the file comes back with its comments
+and key order intact whether the edit came from the CLI, the desktop app or an
+agent. `sonar groups add`, `rename` and `remove` need the daemon and start it if
+it is not already running; the three names are subcommands, so a group actually
+called `add` is read with `sonar groups --json`.
 
 ### `sonar kill`
 
