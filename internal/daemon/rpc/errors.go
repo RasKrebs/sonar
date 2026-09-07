@@ -34,6 +34,7 @@ const (
 	CodeTimeout         = 1008
 	CodeInvalidSelector = 1009
 	CodeOutsideHome     = 1010
+	CodeConflict        = 1011
 
 	// 1100-1199 are owned by spec 3 (expose and proxies).
 	CodeTargetNotListening   = 1100
@@ -65,6 +66,7 @@ var codeNames = map[int]string{
 	CodeTimeout:         "timeout",
 	CodeInvalidSelector: "invalid_selector",
 	CodeOutsideHome:     "outside_home",
+	CodeConflict:        "conflict",
 
 	CodeTargetNotListening:   "target_not_listening",
 	CodeProviderNotInstalled: "provider_not_installed",

@@ -367,3 +367,210 @@ func waitForGroup(t *testing.T, c *testClient, name string) *state.Group {
 	}
 	return nil
 }
+
+// TestGroupsConfigSetAddsRenamesAndRemoves is step 5A.4's reason to exist: the
+// daemon owns every edit to a `.sonar.yaml`, so a client never has to write the
+// file itself to add a service or rename one.
+func TestGroupsConfigSetAddsRenamesAndRemoves(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h, _, path := configHarness(t, ctx)
+	c := h.dial(ctx)
+
+	var snap state.Snapshot
+	if e := c.call("state.subscribe", rpc.StateSubscribeParams{}, &snap); e != nil {
+		t.Fatalf("state.subscribe: %v", e)
+	}
+
+	// Add. The delta collected here is the one published before the reply was
+	// queued (contract §38, §44): the caller cannot see the acknowledgement
+	// before the change.
+	var res rpc.GroupsConfigSetResult
+	seen := callCollectingGroups(t, c, "groups.config.set", rpc.GroupsConfigSetParams{
+		Path: path,
+		Add: []groups.ServiceAdd{{
+			Name: "worker", Port: 9000, Cmd: "uv run worker", Color: "green", DependsOn: []string{"db"},
+		}},
+	}, &res)
+	if !res.OK || len(res.Affected) != 1 || res.Affected[0] != "worker" {
+		t.Errorf("result = %+v", res.MutationResult)
+	}
+	if len(res.Config.Services) != 3 || res.Config.Services[2].Name != "worker" {
+		t.Fatalf("returned config = %+v", res.Config.Services)
+	}
+	g, ok := seen["demo"]
+	if !ok {
+		t.Fatal("the add was acknowledged before the delta that carries it")
+	}
+	if len(g.Services) != 3 || g.Services[2].Name != "worker" {
+		t.Errorf("the published group is stale: %+v", g.Services)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "# the database goes first") {
+		t.Errorf("the comment was lost:\n%s", raw)
+	}
+
+	// Rename, and every depends_on reference with it.
+	seen = callCollectingGroups(t, c, "groups.config.set", rpc.GroupsConfigSetParams{
+		Path:   path,
+		Rename: []groups.ServiceRename{{From: "db", To: "database"}},
+	}, &res)
+	if len(res.Affected) != 1 || res.Affected[0] != "database" {
+		t.Errorf("affected = %v, want the new name", res.Affected)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "depends_on: [db]") || !strings.Contains(string(raw), "depends_on: [database]") {
+		t.Errorf("the rename did not follow depends_on:\n%s", raw)
+	}
+	if g, ok := seen["demo"]; ok && g.Services[0].Name != "database" {
+		t.Errorf("the published group is stale: %+v", g.Services[0])
+	}
+
+	// Remove, and the dependency on it.
+	if e := c.call("groups.config.set", rpc.GroupsConfigSetParams{
+		Path:   path,
+		Remove: []string{"database"},
+	}, &res); e != nil {
+		t.Fatalf("groups.config.set remove: %v", e)
+	}
+	if len(res.Affected) != 1 || res.Affected[0] != "database" {
+		t.Errorf("affected = %v", res.Affected)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "database") {
+		t.Errorf("the removed service is still referenced:\n%s", raw)
+	}
+	if len(res.Config.Services) != 2 {
+		t.Errorf("config = %+v, want api and worker left", res.Config.Services)
+	}
+}
+
+// TestGroupsConfigSetIsAtomic: the four lists are one change. A rename that
+// clashes after an add has already been applied must leave the file byte for
+// byte as it was.
+func TestGroupsConfigSetIsAtomic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h, _, path := configHarness(t, ctx)
+	c := h.dial(ctx)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := c.call("groups.config.set", rpc.GroupsConfigSetParams{
+		Path:     path,
+		Add:      []groups.ServiceAdd{{Name: "worker", Port: 9000}},
+		Rename:   []groups.ServiceRename{{From: "db", To: "api"}},
+		Services: []groups.ServiceEdit{{Name: "api", Patch: groups.ServicePatch{}.SetString(groups.FieldIcon, "gear")}},
+	}, nil)
+	if e == nil {
+		t.Fatal("a rename onto an existing name should fail the whole call")
+	}
+	if e.Code != rpc.CodeConflict || e.Data.Code != "conflict" {
+		t.Errorf("error = %+v, want 1011 conflict", e)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a failed edit changed the file:\n%s", after)
+	}
+}
+
+// TestGroupsConfigSetEditErrors walks the codes the new lists can return.
+func TestGroupsConfigSetEditErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h, _, path := configHarness(t, ctx)
+	c := h.dial(ctx)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name   string
+		params rpc.GroupsConfigSetParams
+		want   string
+	}{
+		{"a name the file already has", rpc.GroupsConfigSetParams{
+			Path: path, Add: []groups.ServiceAdd{{Name: "api", Port: 9000}},
+		}, "conflict"},
+		{"a port the file already has", rpc.GroupsConfigSetParams{
+			Path: path, Add: []groups.ServiceAdd{{Name: "worker", Port: 8000}},
+		}, "conflict"},
+		{"renaming a service that is not there", rpc.GroupsConfigSetParams{
+			Path: path, Rename: []groups.ServiceRename{{From: "worker", To: "jobs"}},
+		}, "not_found"},
+		{"removing a service that is not there", rpc.GroupsConfigSetParams{
+			Path: path, Remove: []string{"worker"},
+		}, "not_found"},
+		{"an edit that asks for nothing", rpc.GroupsConfigSetParams{Path: path}, "invalid_params"},
+		{"a rename with no target name", rpc.GroupsConfigSetParams{
+			Path: path, Rename: []groups.ServiceRename{{From: "db", To: "  "}},
+		}, "invalid_params"},
+		{"an add with no name", rpc.GroupsConfigSetParams{
+			Path: path, Add: []groups.ServiceAdd{{Port: 9000}},
+		}, "invalid_params"},
+		{"an add whose depends_on names nothing", rpc.GroupsConfigSetParams{
+			Path: path, Add: []groups.ServiceAdd{{Name: "worker", Port: 9000, DependsOn: []string{"nope"}}},
+		}, "invalid_config"},
+	}
+	for _, tc := range cases {
+		e := c.call("groups.config.set", tc.params, nil)
+		if e == nil {
+			t.Errorf("%s: should have failed", tc.name)
+			continue
+		}
+		if e.Data.Code != tc.want {
+			t.Errorf("%s: error = %+v, want %s", tc.name, e, tc.want)
+		}
+		if e.Data.Hint == "" {
+			t.Errorf("%s: error carries no hint: %+v", tc.name, e)
+		}
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a failed edit changed the file:\n%s", after)
+	}
+}
+
+// TestGroupsConfigSetRemoveThenAddReusesThePort: the lists are applied remove
+// first, so swapping one service for another on the same port is one call.
+func TestGroupsConfigSetRemoveThenAddReusesThePort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h, _, path := configHarness(t, ctx)
+	c := h.dial(ctx)
+
+	var res rpc.GroupsConfigSetResult
+	if e := c.call("groups.config.set", rpc.GroupsConfigSetParams{
+		Path:   path,
+		Remove: []string{"api"},
+		Add:    []groups.ServiceAdd{{Name: "gateway", Port: 8000}},
+	}, &res); e != nil {
+		t.Fatalf("groups.config.set: %v", e)
+	}
+	if len(res.Affected) != 2 || res.Affected[0] != "api" || res.Affected[1] != "gateway" {
+		t.Errorf("affected = %v, want the removal then the add", res.Affected)
+	}
+	if len(res.Config.Services) != 2 || res.Config.Services[1].Name != "gateway" {
+		t.Errorf("config = %+v", res.Config.Services)
+	}
+}

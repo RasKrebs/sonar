@@ -38,6 +38,16 @@ func handleGroupsInit(_ context.Context, req *Request) (any, error) {
 	if err := req.Bind(&p); err != nil {
 		return nil, err
 	}
+	if p.Force && p.Merge {
+		return nil, rpc.NewError(rpc.CodeInvalidParams, "force and merge cannot both be set",
+			"force replaces the file, merge appends to it; pick one")
+	}
+	for _, svc := range p.Services {
+		if strings.TrimSpace(svc.Name) == "" {
+			return nil, rpc.NewError(rpc.CodeInvalidParams, "services names an empty service",
+				`each entry is {"name": "api", "port": 8000}`)
+		}
+	}
 	root, err := initRoot(p.RootDir)
 	if err != nil {
 		return nil, err
@@ -54,17 +64,35 @@ func handleGroupsInit(_ context.Context, req *Request) (any, error) {
 		return nil, err
 	}
 	cfg := groups.Propose(root, state.ToListeningAll(snap.Ports), nil)
+	if len(p.Services) > 0 {
+		// The caller curated the proposal: names, ports and metadata are
+		// theirs, and the cmd the proposal guessed is carried onto an entry
+		// that kept the port it was guessed for.
+		cfg = groups.Curate(cfg, p.Services)
+	}
+
+	_, statErr := os.Lstat(target)
+	exists := statErr == nil
+	if p.Merge && exists {
+		return mergeInit(req, target, cfg, snap, p.Write)
+	}
+
 	data, err := groups.Marshal(cfg)
 	if err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "rendering "+groups.ConfigName+": "+err.Error(),
 			"check `sonar daemon log`")
+	}
+	// A curated list is the caller's, so it is validated here rather than
+	// discovered by the next scan. The pure proposal cannot fail this.
+	if _, err := groups.Parse(target, data); err != nil {
+		return nil, configError(target, err)
 	}
 
 	result := rpc.GroupsInitResult{
 		MutationResult: rpc.MutationResult{OK: true, Affected: serviceNames(cfg)},
 		Path:           target,
 		YAML:           string(data),
-		Proposal:       proposalGroup(cfg),
+		Proposal:       proposalGroup(cfg, snapshotPorts(snap)),
 	}
 	if !p.Write {
 		// The default is a preview: the caller gets the exact bytes a write
@@ -75,26 +103,67 @@ func handleGroupsInit(_ context.Context, req *Request) (any, error) {
 	// §16: `sonar init` refuses to overwrite without --force, and so does this.
 	// The registry (contract §2) has no `already_exists`, and inventing a code
 	// for one method is worse than the accurate hint, so this is
-	// `invalid_params` naming the parameter that unblocks it.
-	if _, err := os.Lstat(target); err == nil && !p.Force {
+	// `invalid_params` naming the parameters that unblock it.
+	if exists && !p.Force {
 		return nil, rpc.NewError(rpc.CodeInvalidParams, target+" already exists",
-			`pass {"force": true} to overwrite it, or read it with groups.config.get`)
+			`pass {"force": true} to overwrite it or {"merge": true} to append to it, `+
+				"or read it with groups.config.get")
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+	if err := groups.WriteConfigFile(target, data); err != nil {
 		return nil, rpc.NewError(rpc.CodeInternal, "writing "+target+": "+err.Error(),
 			"check that the daemon may write to "+root)
 	}
-
-	// Index the file the daemon just wrote and republish, so the group flips to
-	// source `file` in the delta subscribers get before the caller's own next
-	// read (the same order `groups.config.set` keeps).
-	if err := req.Runtime.Scanner.LoadConfig(target); err != nil {
-		req.Runtime.Logger.Warn("reloading a config after writing it", "path", target, "error", err)
-	}
-	req.Runtime.Logger.Info("wrote "+groups.ConfigName,
-		"path", target, "group", cfg.Name, "services", len(cfg.Services))
-	republish(req.Runtime)
+	publishConfig(req, target, cfg.Name, len(cfg.Services))
 	return result, nil
+}
+
+// mergeInit appends a proposal into a `.sonar.yaml` that is already there,
+// rather than refusing it. The append goes through the same node-level edit
+// `groups.config.set` uses, so the file's comments and order survive and a
+// service name or port the file already has is a `conflict` — and, because the
+// bytes are rendered before anything is written, `write: false` previews the
+// merged file exactly.
+func mergeInit(req *Request, target string, cfg *groups.Config, snap state.Snapshot, write bool) (any, error) {
+	adds := groups.AddsFrom(cfg)
+	data, merged, err := groups.RenderEdit(target, groups.ConfigEdit{Add: adds})
+	if err != nil {
+		return nil, configError(target, err)
+	}
+	result := rpc.GroupsInitResult{
+		MutationResult: rpc.MutationResult{OK: true, Affected: serviceNames(cfg)},
+		Path:           target,
+		YAML:           string(data),
+		Proposal:       proposalGroup(merged, snapshotPorts(snap)),
+	}
+	if !write {
+		return result, nil
+	}
+	if err := groups.WriteConfigFile(merged.Path, data); err != nil {
+		return nil, rpc.NewError(rpc.CodeInternal, "writing "+target+": "+err.Error(),
+			"check that the daemon may write to "+filepath.Dir(target))
+	}
+	publishConfig(req, merged.Path, merged.Name, len(adds))
+	return result, nil
+}
+
+// publishConfig indexes a file the daemon just wrote and republishes, so the
+// group reaches subscribers as a groups delta before the caller's own next read
+// (the same order `groups.config.set` keeps, contract §38 and §44).
+func publishConfig(req *Request, path, group string, services int) {
+	if err := req.Runtime.Scanner.LoadConfig(path); err != nil {
+		req.Runtime.Logger.Warn("reloading a config after writing it", "path", path, "error", err)
+	}
+	req.Runtime.Logger.Info("wrote "+groups.ConfigName, "path", path, "group", group, "services", services)
+	republish(req.Runtime)
+}
+
+// snapshotPorts is the set of ports the snapshot this call read saw listening.
+func snapshotPorts(snap state.Snapshot) map[int]bool {
+	out := make(map[int]bool, len(snap.Ports))
+	for _, p := range snap.Ports {
+		out[p.Port] = true
+	}
+	return out
 }
 
 // initRoot validates the caller's root and resolves it the way `sonar init`
@@ -153,11 +222,12 @@ func serviceNames(cfg *groups.Config) []string {
 	return out
 }
 
-// proposalGroup renders the proposed config as the group row it would produce.
-// Every proposed service came from a port listening in the snapshot this call
-// read, so the rows are marked running: that is what "proposed from what is
-// running now" means, and it saves a client a second join to say so.
-func proposalGroup(cfg *groups.Config) state.Group {
+// proposalGroup renders the config this call would write as the group row it
+// produces. A service is marked running when its port is listening in the
+// snapshot the call read: every service of a plain proposal came from such a
+// port, so that path is unchanged, while a curated or merged file can honestly
+// carry services that are declared but down.
+func proposalGroup(cfg *groups.Config, listening map[int]bool) state.Group {
 	dir, path := cfg.Dir, cfg.Path
 	g := state.Group{
 		Name:       cfg.Name,
@@ -168,17 +238,24 @@ func proposalGroup(cfg *groups.Config) state.Group {
 		Members:    []int{},
 		Services:   groups.ServiceRows(cfg),
 	}
+	up := 0
 	for i := range g.Services {
-		if g.Services[i].Port == nil {
+		if g.Services[i].Port == nil || !listening[*g.Services[i].Port] {
 			continue
 		}
 		port := *g.Services[i].Port
 		g.Services[i].Running, g.Services[i].PortActual = true, &port
 		g.Members = append(g.Members, port)
+		up++
 	}
 	sort.Ints(g.Members)
-	if len(g.Services) > 0 {
+	switch {
+	case up == 0:
+		g.Status = "stopped"
+	case up == len(g.Services):
 		g.Status = "running"
+	default:
+		g.Status = "partial"
 	}
 	return g
 }

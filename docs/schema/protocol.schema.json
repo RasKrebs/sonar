@@ -1164,12 +1164,29 @@
             "$ref": "#/definitions/ServiceEdit"
           },
           "type": "array"
+        },
+        "add": {
+          "items": {
+            "$ref": "#/definitions/ServiceAdd"
+          },
+          "type": "array"
+        },
+        "rename": {
+          "items": {
+            "$ref": "#/definitions/ServiceRename"
+          },
+          "type": "array"
+        },
+        "remove": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object",
       "required": [
-        "path",
-        "services"
+        "path"
       ]
     },
     "GroupsConfigSetResult": {
@@ -1211,6 +1228,15 @@
         },
         "force": {
           "type": "boolean"
+        },
+        "merge": {
+          "type": "boolean"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/definitions/ServiceAdd"
+          },
+          "type": "array"
         }
       },
       "type": "object",
@@ -3301,6 +3327,44 @@
         "port_actual"
       ]
     },
+    "ServiceAdd": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "cmd": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "health": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    },
     "ServiceEdit": {
       "properties": {
         "name": {
@@ -3370,6 +3434,21 @@
         }
       },
       "type": "object"
+    },
+    "ServiceRename": {
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ]
     },
     "Session": {
       "properties": {
