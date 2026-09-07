@@ -425,15 +425,33 @@ type GroupsConfigGetResult struct {
 	Config GroupConfig `json:"config"`
 }
 
+// GroupsConfigSetParams is one atomic edit of a `.sonar.yaml` (contract §13.2,
+// extended by step 5A.4). The four lists may be combined in a single call and
+// are applied in this order — Remove, Rename, Add, then the Services metadata
+// patches — with each list seeing the file as the previous ones left it.
+// Nothing is written unless the whole edit succeeds and the result still
+// validates, so a call that fails leaves the file byte-identical.
 type GroupsConfigSetParams struct {
 	HostParams
-	Path     string               `json:"path"`
-	Services []groups.ServiceEdit `json:"services"`
+	Path string `json:"path"`
+	// Services patches the metadata of services that already exist.
+	Services []groups.ServiceEdit `json:"services,omitempty"`
+	// Add appends services. A name or a port the file already uses is
+	// `conflict`.
+	Add []groups.ServiceAdd `json:"add,omitempty"`
+	// Rename renames services everywhere in the file, depends_on references
+	// included. An unknown `from` is `not_found`, a `to` already in the file is
+	// `conflict`.
+	Rename []groups.ServiceRename `json:"rename,omitempty"`
+	// Remove deletes services and drops them from every other service's
+	// depends_on. An unknown name is `not_found`.
+	Remove []string `json:"remove,omitempty"`
 }
 
 // GroupsConfigSetResult is the file after the write. Affected carries the
-// service names that were patched: this method mutates a config, not a port,
-// so there is no port key to report (step 1A.7).
+// service names the edit touched, in the order it applied them — a removed
+// name, a rename's new name, an added name, a patched name: this method mutates
+// a config, not a port, so there is no port key to report (step 1A.7).
 type GroupsConfigSetResult struct {
 	MutationResult
 	Path   string      `json:"path"`
@@ -453,13 +471,19 @@ type ConfigProblem struct {
 
 // GroupsInitParams asks for a proposed `.sonar.yaml` for the checkout at
 // RootDir. Write is the contract's opt-in to actually writing it, so the
-// default is a preview; Force is the wire form of `sonar init --force` and is
-// the only way past an existing file (contract §4, §16).
+// default is a preview; Force is the wire form of `sonar init --force` and
+// overwrites an existing file, while Merge appends into one instead (contract
+// §4, §16, step 5A.4). Force and Merge are mutually exclusive.
 type GroupsInitParams struct {
 	HostParams
 	RootDir string `json:"root_dir"`
 	Write   bool   `json:"write,omitempty"`
 	Force   bool   `json:"force,omitempty"`
+	Merge   bool   `json:"merge,omitempty"`
+	// Services replaces the proposed service list with the caller's own, so a
+	// curated file can be written in one call. An entry that names a port the
+	// proposal also found keeps that proposal's cmd and cwd.
+	Services []groups.ServiceAdd `json:"services,omitempty"`
 }
 
 type GroupsInitResult struct {

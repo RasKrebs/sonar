@@ -49,9 +49,19 @@ func handleGroupsConfigSet(_ context.Context, req *Request) (any, error) {
 		return nil, rpc.NewError(rpc.CodeInvalidParams, "path is required",
 			`send {"path": "/repo/.sonar.yaml", "services": [{"name": "api", "patch": {"icon": "server"}}]}`)
 	}
-	if len(p.Services) == 0 {
-		return nil, rpc.NewError(rpc.CodeInvalidParams, "services is required",
-			`each entry is {"name": "<service>", "patch": {...}}; a null value clears a key`)
+	edit := groups.ConfigEdit{
+		Remove:   p.Remove,
+		Rename:   p.Rename,
+		Add:      p.Add,
+		Services: p.Services,
+	}
+	if edit.Empty() {
+		return nil, rpc.NewError(rpc.CodeInvalidParams, "services, add, rename or remove is required",
+			`send {"path": "…", "add": [{"name": "worker", "port": 9000}]}, or a rename, a remove, `+
+				`or {"services": [{"name": "api", "patch": {...}}]}`)
+	}
+	if err := checkEditNames(edit); err != nil {
+		return nil, err
 	}
 	if err := checkConfigPath(path); err != nil {
 		return nil, err
@@ -64,29 +74,62 @@ func handleGroupsConfigSet(_ context.Context, req *Request) (any, error) {
 	// for a LineComment and the emitter always writes exactly one space, so
 	// preserving it would mean re-rendering the file by hand; the comment
 	// itself is never lost, and that is where this stops.
-	cfg, err := groups.PatchServices(path, p.Services)
+	//
+	// The whole edit is applied to the node tree and validated before a byte is
+	// written, so a rename that clashes half way through a batch leaves the
+	// file exactly as it was.
+	cfg, err := groups.EditServices(path, edit)
 	if err != nil {
 		return nil, configError(path, err)
 	}
 
 	// Index the file the daemon just wrote, then republish: the edit reaches
 	// subscribers as a groups delta before the caller's own next read
-	// (contract §13.2).
+	// (contract §13.2, §38, §44).
 	if err := req.Runtime.Scanner.LoadConfig(cfg.Path); err != nil {
 		req.Runtime.Logger.Warn("reloading a config after writing it", "path", cfg.Path, "error", err)
 	}
-	req.Runtime.Logger.Info("config written", "path", cfg.Path, "services", len(p.Services))
+	affected := edit.Affected()
+	req.Runtime.Logger.Info("config written", "path", cfg.Path, "services", len(affected))
 	republish(req.Runtime)
 
-	affected := make([]string, 0, len(p.Services))
-	for _, edit := range p.Services {
-		affected = append(affected, edit.Name)
-	}
 	return rpc.GroupsConfigSetResult{
 		MutationResult: rpc.MutationResult{OK: true, Affected: affected},
 		Path:           cfg.Path,
 		Config:         configRow(req.Runtime, cfg),
 	}, nil
+}
+
+// checkEditNames rejects an edit whose shape is wrong before anything is read
+// from the disk. An empty service name is a caller bug, not a config problem,
+// so it is `invalid_params` rather than the `invalid_config` a nameless service
+// would earn once written.
+func checkEditNames(edit groups.ConfigEdit) error {
+	for _, name := range edit.Remove {
+		if strings.TrimSpace(name) == "" {
+			return rpc.NewError(rpc.CodeInvalidParams, "remove names an empty service",
+				`each entry is the name of a service in the file: {"remove": ["worker"]}`)
+		}
+	}
+	for _, r := range edit.Rename {
+		if strings.TrimSpace(r.From) == "" || strings.TrimSpace(r.To) == "" {
+			return rpc.NewError(rpc.CodeInvalidParams, "rename needs a from and a to",
+				`each entry is {"from": "<current name>", "to": "<new name>"}`)
+		}
+	}
+	for _, a := range edit.Add {
+		if strings.TrimSpace(a.Name) == "" {
+			return rpc.NewError(rpc.CodeInvalidParams, "add names an empty service",
+				`each entry is {"name": "worker", "port": 9000}`)
+		}
+	}
+	for _, e := range edit.Services {
+		if strings.TrimSpace(e.Name) == "" {
+			return rpc.NewError(rpc.CodeInvalidParams, "services names an empty service",
+				`each entry is {"name": "<service>", "patch": {...}}; a null value clears a key`)
+		}
+	}
+	return nil
 }
 
 func handleGroupsReload(_ context.Context, req *Request) (any, error) {
@@ -147,13 +190,23 @@ func checkConfigPath(path string) error {
 }
 
 // configError maps a config failure onto the contract's error registry: a
-// missing file or service is `not_found`, a file that no longer validates is
-// `1006 invalid_config` with the problems in data.detail (contract §13.2).
+// missing file or service is `not_found`, a name or a port an added or renamed
+// service would take twice is `1011 conflict`, and a file that no longer
+// validates is `1006 invalid_config` with the problems in data.detail
+// (contract §13.2, step 5A.4).
 func configError(path string, err error) error {
 	var missing *groups.ServiceNotFoundError
 	if errors.As(err, &missing) {
 		return rpc.NewError(rpc.CodeNotFound, missing.Error(),
 			"`groups.config.get` lists the service names this file declares")
+	}
+	var clash *groups.ServiceConflictError
+	if errors.As(err, &clash) {
+		hint := "pick another name, or rename the service that has it"
+		if clash.Port != 0 {
+			hint = "pick another port, or remove " + clash.Name + " in the same call"
+		}
+		return rpc.NewError(rpc.CodeConflict, clash.Error(), hint)
 	}
 	var bad *groups.ConfigError
 	if errors.As(err, &bad) {
